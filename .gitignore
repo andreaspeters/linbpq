@@ -1,4 +1,4 @@
-.map
+*.map
 linbpq
-.d
-.o
+*.d
+*.o
