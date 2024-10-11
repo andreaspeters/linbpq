@@ -3635,8 +3635,8 @@ void printStack(void)
 
 pthread_t ResolveUpdateThreadId = 0;
 
-char NodeMapServer[80] = "update.g8bpq.net";
-char ChatMapServer[80] = "chatupdate.g8bpq.net";
+char NodeMapServer[80] = "127.0.0.1";
+char ChatMapServer[80] = "127.0.0.1";
 
 VOID ResolveUpdateThread(void * Unused)
 {
@@ -3683,6 +3683,7 @@ VOID ResolveUpdateThread(void * Unused)
 
 VOID OpenReportingSockets()
 {
+  /*
 	u_long param=1;
 	BOOL bcopt=TRUE;
 
@@ -3716,6 +3717,7 @@ VOID OpenReportingSockets()
 	Chatreportdest.sin_port = htons(81);
 
 	_beginthread(ResolveUpdateThread, 0, NULL);
+  */
 }
 
 VOID WriteMiniDumpThread();
