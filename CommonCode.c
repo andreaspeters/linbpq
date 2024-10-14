@@ -3635,8 +3635,8 @@ void printStack(void)
 
 pthread_t ResolveUpdateThreadId = 0;
 
-char NodeMapServer[80] = "127.0.0.1";
-char ChatMapServer[80] = "127.0.0.1";
+char NodeMapServer[80] = "";
+char ChatMapServer[80] = "";
 
 VOID ResolveUpdateThread(void * Unused)
 {
@@ -3675,7 +3675,7 @@ VOID ResolveUpdateThread(void * Unused)
 			continue;
 		}
 
-		Debugprintf("Resolve Failed for update.g8bpq.net or chatmap.g8bpq.net");
+		Debugprintf("Resolve Failed for %s or %s", NodeMapServer, ChatMapServer);
 		Sleep(1000 * 60 * 5);
 	}
 }
@@ -3683,7 +3683,9 @@ VOID ResolveUpdateThread(void * Unused)
 
 VOID OpenReportingSockets()
 {
-  /*
+  if (strcmp(NodeMapServer, "") == 0 && strcmp(ChatMapServer, "") == 0) {
+    return;
+  }
 	u_long param=1;
 	BOOL bcopt=TRUE;
 
@@ -3717,7 +3719,6 @@ VOID OpenReportingSockets()
 	Chatreportdest.sin_port = htons(81);
 
 	_beginthread(ResolveUpdateThread, 0, NULL);
-  */
 }
 
 VOID WriteMiniDumpThread();
