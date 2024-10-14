@@ -3654,22 +3654,23 @@ VOID ResolveUpdateThread(void * Unused)
 		}
 
 		//	Resolve name to address
+    if (strcmp(NodeMapServer, "") != 0) {
+		  Debugprintf("Resolving %s", NodeMapServer);
+		  HostEnt1 = gethostbyname (NodeMapServer);
 
-		Debugprintf("Resolving %s", NodeMapServer);
-		HostEnt1 = gethostbyname (NodeMapServer);
-//		HostEnt1 = gethostbyname ("192.168.1.64");
+		  if (HostEnt1)
+		  	memcpy(&reportdest.sin_addr.s_addr,HostEnt1->h_addr,4);
+    }
 
-		if (HostEnt1)
-			memcpy(&reportdest.sin_addr.s_addr,HostEnt1->h_addr,4);
+    if (strcmp(ChatMapServer, "") != 0) {
+		  Debugprintf("Resolving %s", ChatMapServer);
+		  HostEnt2 = gethostbyname (ChatMapServer);
 
-		Debugprintf("Resolving %s", ChatMapServer);
-		HostEnt2 = gethostbyname (ChatMapServer);
-//		HostEnt2 = gethostbyname ("192.168.1.64");
+		  if (HostEnt2)
+		  	memcpy(&Chatreportdest.sin_addr.s_addr,HostEnt2->h_addr,4);
+    }
 
-		if (HostEnt2)
-			memcpy(&Chatreportdest.sin_addr.s_addr,HostEnt2->h_addr,4);
-
-		if (HostEnt1 && HostEnt2)
+		if (HostEnt1 || HostEnt2)
 		{
 			Sleep(1000 * 60 * 30);
 			continue;
@@ -3683,9 +3684,6 @@ VOID ResolveUpdateThread(void * Unused)
 
 VOID OpenReportingSockets()
 {
-  if (strcmp(NodeMapServer, "") == 0 && strcmp(ChatMapServer, "") == 0) {
-    return;
-  }
 	u_long param=1;
 	BOOL bcopt=TRUE;
 
