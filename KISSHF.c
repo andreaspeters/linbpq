@@ -27,7 +27,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 #include <stdio.h>
 #include <time.h>
 
-#include "CHeaders.h"
+#include "cheaders.h"
 
 
 extern int (WINAPI FAR *GetModuleFileNameExPtr)();
@@ -350,6 +350,7 @@ ok:
 
 			// See if any frames for this port
 
+
 			STREAM = &TNC->Streams[0];
 
 			if (STREAM->BPQtoPACTOR_Q)
@@ -358,7 +359,7 @@ ok:
 				UCHAR * data = &buffptr->Data[0];
 				STREAM->FramesQueued--;
 				txlen = (int)buffptr->Len;
-				STREAM->BytesTXed += txlen;
+				STREAM->bytesTXed += txlen;
 
 				bytes=SerialSendData(TNC, data, txlen);
 				WritetoTrace(TNC, data, txlen);
@@ -457,8 +458,12 @@ ok:
 	
 		if (_memicmp(txbuff, "RADIO ", 6) == 0)
 		{
-			sprintf(&buff->L2DATA[0], "%d %s", TNC->Port, &txbuff[6]);
+			char cmd[56];
 
+			strcpy(cmd, &buff->L2DATA[6]);
+			sprintf(&buff->L2DATA[0], "%d %s", TNC->Port, cmd);
+
+	
 			if (Rig_Command(TNC->PortRecord->ATTACHEDSESSIONS[0]->L4CROSSLINK, &buff->L2DATA[0]))
 			{
 			}
@@ -725,7 +730,7 @@ VOID KISSHFReleaseTNC(struct TNCINFO * TNC)
 	ReleaseOtherPorts(TNC);
 }
 
-VOID KISSHFSuspendPort(struct TNCINFO * TNC, struct TNCINFO * ThisTNC)
+VOID KISSHFSuspendPort(struct TNCINFO * TNC, struct TNCINFO * THISTNC)
 {
 	TNC->PortRecord->PORTCONTROL.PortSuspended = 1;
 	strcpy(TNC->WEB_TNCSTATE, "Interlocked");
@@ -808,10 +813,10 @@ VOID * KISSHFExtInit(EXTPORTDATA * PortEntry)
 	}
 	
 	TNC->Port = port;
-	TNC->Hardware = H_KISSHF;
+	TNC->PortRecord = PortEntry;
+	TNC->PortRecord->PORTCONTROL.HWType = TNC->Hardware = H_KISSHF;
 	TNC->ARDOPBuffer = malloc(8192);
 
-	TNC->PortRecord = PortEntry;
 
 	if (PortEntry->PORTCONTROL.PORTCALL[0] == 0)
 		memcpy(TNC->NodeCall, MYNODECALL, 10);

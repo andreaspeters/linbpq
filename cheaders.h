@@ -30,6 +30,9 @@ int IntDecodeFrame(MESSAGE * msg, char * buffer, time_t Stamp, uint64_t Mask, BO
 int IntSetTraceOptionsEx(uint64_t mask, int mtxparam, int mcomparam, int monUIOnly);
 int CountBits64(uint64_t in);
 
+
+#define GetSemaphore(Semaphore,ID) _GetSemaphore(Semaphore, ID, __FILE__, __LINE__)
+
 #define GetBuff() _GetBuff(__FILE__, __LINE__)
 #define ReleaseBuffer(s) _ReleaseBuffer(s, __FILE__, __LINE__)
 #define CheckGuardZone() _CheckGuardZone(__FILE__, __LINE__)
@@ -64,13 +67,13 @@ DllExport int APIENTRY GetConnectionInfo(int stream, char * callsign,
 										 int * port, int * sesstype, int * paclen,
 										 int * maxframe, int * l4window);
 
+#define LIBCONFIG_STATIC
+#include "libconfig.h"
 
-struct config_setting_t;
-
-int GetIntValue(struct config_setting_t * group, char * name);
-BOOL GetStringValue(struct config_setting_t * group, char * name, char * value);
-VOID SaveIntValue(struct config_setting_t * group, char * name, int value);
-VOID SaveStringValue(struct config_setting_t * group, char * name, char * value);
+int GetIntValue(config_setting_t * group, char * name);
+BOOL GetStringValue(config_setting_t * group, char * name, char * value, int maxlen);
+VOID SaveIntValue(config_setting_t * group, char * name, int value);
+VOID SaveStringValue(config_setting_t * group, char * name, char * value);
 
 int EncryptPass(char * Pass, char * Encrypt);
 VOID DecryptPass(char * Encrypt, unsigned char * Pass, unsigned int len);
@@ -92,7 +95,6 @@ VOID InnerCommandHandler(TRANSPORTENTRY * Session, struct DATAMESSAGE * Buffer);
 VOID DoTheCommand(TRANSPORTENTRY * Session);
 char * MOVEANDCHECK(TRANSPORTENTRY * Session, char * Bufferptr, char * Source, int Len);
 VOID DISPLAYCIRCUIT(TRANSPORTENTRY * L4, char * Buffer);
-char * FormatUptime(int Uptime);
 char * strlop(char * buf, char delim);
 BOOL CompareCalls(UCHAR * c1, UCHAR * c2);
 
@@ -109,7 +111,7 @@ int cCOUNT_AT_L2(struct _LINKTABLE * LINK);
 VOID SENDL4CONNECT(TRANSPORTENTRY * Session);
 
 VOID CloseSessionPartner(TRANSPORTENTRY * Session);
-int COUNTNODES();
+int COUNTNODES(struct ROUTE * ROUTE);
 int DecodeNodeName(char * NodeName, char * ptr);;
 VOID DISPLAYCIRCUIT(TRANSPORTENTRY * L4, char * Buffer);
 int cCOUNT_AT_L2(struct _LINKTABLE * LINK);
@@ -153,9 +155,10 @@ int APIENTRY Reboot();
 int APIENTRY Reconfig();
 Dll int APIENTRY SaveNodes ();
 
+
 struct SEM;
 
-void GetSemaphore(struct SEM * Semaphore, int ID);
+void _GetSemaphore(struct SEM * Semaphore, int ID, char * File, int Line);
 void FreeSemaphore(struct SEM * Semaphore);
 
 void MySetWindowText(HWND hWnd, char * Msg);
@@ -251,6 +254,7 @@ extern UCHAR	MYCALLWITHALIAS[13];
 extern APPLCALLS APPLCALLTABLE[NumberofAppls];
 
 extern UCHAR MYNODECALL[];				// NODE CALLSIGN (ASCII)
+extern char NODECALLLOPPED[];			// NODE CALLSIGN (ASCII). Null terminated
 extern UCHAR MYNETROMCALL[];			// NETROM CALLSIGN (ASCII)
 
 extern UCHAR NETROMCALL[];				// NETORM CALL (AX25)
@@ -357,7 +361,7 @@ extern char * ConfigBuffer;
 
 extern char * WL2KReportLine[];
 
-extern CMDX COMMANDS[];
+extern struct CMDX COMMANDS[];
 
 extern int QCOUNT, MAXBUFFS, MAXCIRCUITS, L4DEFAULTWINDOW, L4T1, CMDXLEN;
 extern char CMDALIAS[ALIASLEN][NumberofAppls];
@@ -396,6 +400,7 @@ extern int REALTIMETICKS;
 
 extern time_t CurrentSecs;
 extern time_t lastSlowSecs;
+extern time_t lastSaveSecs;
 
 // SNMP Variables
 
@@ -427,4 +432,19 @@ extern char Message[MaxBPQPortNo + 1][1000];		// Beacon Text
 extern int MinCounter[MaxBPQPortNo + 1];			// Interval Countdown
 extern BOOL SendFromFile[MaxBPQPortNo + 1];
 
+extern BOOL MQTT;
+extern char MQTT_HOST[80];
+extern int MQTT_PORT;
+extern char MQTT_USER[80];
+extern char MQTT_PASS[80];
+
 DllExport uint64_t APIENTRY GetPortFrequency(int PortNo, char * FreqStringMhz);
+
+
+void hookL2SessionAccepted(int Port, char * remotecall, char * ourcall, struct _LINKTABLE * LINK);
+void hookL2SessionDeleted(struct _LINKTABLE * LINK);
+void hookL2SessionAttempt(int Port, char * ourcall, char * remotecall, struct _LINKTABLE * LINK);
+
+void hookL4SessionAttempt(void * STREAM, char * remotecall, char * ourcall);
+void hookL4SessionAccepted(void * STREAM, char * remotecall, char * ourcall);
+void hookL4SessionDeleted(struct TNCINFO * TNC, void * STREAM);

@@ -23,7 +23,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #define _CRT_SECURE_NO_DEPRECATE
 
-#include "CHeaders.h"
+#include "cheaders.h"
 
 extern int (WINAPI FAR *GetModuleFileNameExPtr)();
 extern int (WINAPI FAR *EnumProcessesPtr)();
@@ -367,10 +367,10 @@ static VOID UpdateStatsLine(struct TNCINFO * TNC, struct STREAMINFO * STREAM)
 {
 	char Count[16];
 	
-	sprintf(Count, "%d", STREAM->BytesRXed);
+	sprintf(Count, "%d", STREAM->bytesRXed);
 	SetWindowText(STREAM->xIDC_RXED, Count);
 
-	sprintf(Count, "%d", STREAM->BytesTXed);
+	sprintf(Count, "%d", STREAM->bytesTXed);
 	SetWindowText(STREAM->xIDC_SEND, Count);
 	
 	sprintf(Count, "%d", STREAM->BytesResent);
@@ -464,7 +464,7 @@ UINT UIARQExtInit(EXTPORTDATA * PortEntry)
 	ptr=strchr(TNC->NodeCall, ' ');
 	if (ptr) *(ptr) = 0;					// Null Terminate
 
-	TNC->Hardware = H_UIARQ;
+	TNC->PortRecord->PORTCONTROL.HWType = TNC->Hardware = H_UIARQ;
 
 	if (TNC->BusyWait == 0)
 		TNC->BusyWait = 10;
@@ -476,7 +476,7 @@ UINT UIARQExtInit(EXTPORTDATA * PortEntry)
 	while (TNC->ARQPorts[i])
 	{
 		PORT = GetPortTableEntryFromPortNum(TNC->ARQPorts[i]);
-		PORT->UIHook = (FARPROCY)UIHook;
+		PORT->UIHook = UIHook;
 		PORT->HookPort = (struct PORTCONTROL *)PortEntry;
 		i++;
 	}
@@ -849,7 +849,7 @@ static VOID ProcessFLDigiData(struct TNCINFO * TNC, UCHAR * Input, int Len, int 
 
 		strcpy(STREAM->MyCall, call2);
 		STREAM->ConnectTime = time(NULL); 
-		STREAM->BytesRXed = STREAM->BytesTXed = STREAM->BytesAcked = STREAM->BytesResent = 0;
+		STREAM->bytesRXed = STREAM->bytesTXed = STREAM->BytesAcked = STREAM->BytesResent = 0;
 		
 		if (WL2K)
 			strcpy(SESS->RMSCall, WL2K->RMSCall);
@@ -869,7 +869,7 @@ static VOID ProcessFLDigiData(struct TNCINFO * TNC, UCHAR * Input, int Len, int 
 		{
 			char AppName[13];
 
-			memcpy(AppName, &ApplPtr[App * sizeof(CMDX)], 12);
+			memcpy(AppName, &ApplPtr[App * sizeof(struct CMDX)], 12);
 			AppName[12] = 0;
 
 			// Make sure app is available
@@ -1001,7 +1001,7 @@ AckConnectRequest:
 			goto SendKReply;		// Repeated ACK
 
 		STREAM->ConnectTime = time(NULL); 
-		STREAM->BytesRXed = STREAM->BytesTXed = STREAM->BytesAcked = STREAM->BytesResent = 0;
+		STREAM->bytesRXed = STREAM->bytesTXed = STREAM->BytesAcked = STREAM->BytesResent = 0;
 		STREAM->Connected = TRUE;
 
 		ARQ->ARQTimerState = 0;
@@ -1240,20 +1240,7 @@ SendKReply:
 		{
 			// Create a traffic record
 		
-			char logmsg[120];	
-			time_t Duration;
-
-			Duration = time(NULL) - STREAM->ConnectTime;
-				
-			if (Duration == 0)
-				Duration = 1;
-			
-			sprintf(logmsg,"Port %2d %9s Bytes Sent %d  BPS %d Bytes Received %d BPS %d Time %d Seconds",
-				TNC->Port, STREAM->RemoteCall,
-				STREAM->BytesTXed, (int)(STREAM->BytesTXed/Duration),
-				STREAM->BytesRXed, (int)(STREAM->BytesRXed/Duration), (int)Duration);
-
-			Debugprintf(logmsg);
+			hookL4SessionDeleted(TNC, STREAM);
 		}
 
 		STREAM->Connecting = FALSE;
@@ -1313,7 +1300,7 @@ SendKReply:
 
 			buffptr->Len  = Len;
 			memcpy(buffptr->Data, &Input[1], Len);
-			STREAM->BytesRXed += Len;
+			STREAM->bytesRXed += Len;
 
 			UpdateStatsLine(TNC, STREAM);
 
@@ -1401,7 +1388,7 @@ static VOID SendARQData(struct TNCINFO * TNC, PMSGWITHLEN Buffer, int Stream)
 
 	ARQ->TXHOLDQ[ARQ->TXSeq] = Buffer;
 
-	STREAM->BytesTXed += Origlen;
+	STREAM->bytesTXed += Origlen;
 
 	UpdateStatsLine(TNC, STREAM);
 

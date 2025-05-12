@@ -23,8 +23,14 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #include "bpqmail.h"
 
-int32_t Encode(char * in, char * out, int32_t inlen, BOOL B1Protocol, int Compress);
+#define GetSemaphore(Semaphore,ID) _GetSemaphore(Semaphore, ID, __FILE__, __LINE__)
+void _GetSemaphore(struct SEM * Semaphore, int ID, char * File, int Line);
 
+
+void DeleteRestartData(CIRCUIT * conn);
+
+int32_t Encode(char * in, char * out, int32_t inlen, BOOL B1Protocol, int Compress);
+void MQTTMessageEvent(void* message);
 
 int MaxRXSize = 99999;
 int MaxTXSize = 99999;
@@ -37,6 +43,130 @@ int B2RestartCount = 0;
 
 extern char ProperBaseDir[];
 
+char RestartDir[MAX_PATH] = "";
+
+void GetRestartData()
+{
+	int i;
+	struct FBBRestartData Restart;
+	struct FBBRestartData * RestartRec;
+	char MsgFile[MAX_PATH];
+	FILE * hFile;
+	int FileSize;
+	struct stat STAT;
+	size_t ReadLen = 0;
+	time_t Age;
+
+	strcpy(RestartDir, MailDir);
+	strcat(RestartDir, "/Restart");
+
+	// Make sure RestartDir exists
+
+#ifdef WIN32
+	CreateDirectory(RestartDir, NULL);		// Just in case
+#else
+	mkdir(RestartDir, S_IRWXU | S_IRWXG | S_IRWXO);
+	chmod(RestartDir, S_IRWXU | S_IRWXG | S_IRWXO);
+#endif
+
+	// look for restart files. These will be numbered from 1 up
+
+	for (i = 1; 1; i++)
+	{
+		sprintf_s(MsgFile, sizeof(MsgFile), "%s/%d", RestartDir, i);
+						
+		if (stat(MsgFile, &STAT) == -1)
+			break;
+	
+		FileSize = STAT.st_size;
+
+		Age = time(NULL) - STAT.st_ctime;
+
+		if (Age > 86400 * 2)		// Max 2 days
+			continue;
+
+		hFile = fopen(MsgFile, "rb");
+
+		if (hFile == NULL)
+			break;
+
+		// Read Restart Record
+
+		fread(&Restart, 1, sizeof(struct FBBRestartData), hFile); 
+
+		if ((Restart.MailBufferSize + sizeof(struct FBBRestartData)) != FileSize)			// Duff file
+		{
+			fclose(hFile);
+			break;
+		}
+
+		RestartRec = zalloc(sizeof (struct FBBRestartData));
+
+		GetSemaphore(&AllocSemaphore, 0);
+
+		RestartData = realloc(RestartData,(++RestartCount+1) * sizeof(void *));
+		RestartData[RestartCount] = RestartRec;
+
+		FreeSemaphore(&AllocSemaphore);
+
+		memcpy(RestartRec, &Restart, sizeof(struct FBBRestartData));
+		RestartRec->MailBuffer = malloc(RestartRec->MailBufferSize);
+		ReadLen = fread(RestartRec->MailBuffer, 1, RestartRec->MailBufferSize, hFile); 
+		
+		Logprintf(LOG_BBS, 0, '?', "Restart Data for %s %s Len %d Loaded", RestartRec->Call, RestartRec->bid, RestartRec->length);
+		fclose(hFile);
+	}
+}
+
+
+void SaveRestartData()
+{
+	// Save restart data to file so we can reload on restart
+	// Restart data has pointers to buffers so we must save copy of data and reconstitue on restart
+
+	// Delete and resave all restart data to keep restart directory clean
+
+	int i, n = 1;
+	char MsgFile[MAX_PATH];
+	FILE * hFile;
+	size_t WriteLen=0;
+	struct FBBRestartData * RestartRec = NULL;
+	struct stat STAT;
+	time_t NOW = time(NULL);
+
+
+	for (i = 1; 1; i++)
+	{
+		sprintf_s(MsgFile, sizeof(MsgFile), "%s/%d", RestartDir, i);
+						
+		if (stat(MsgFile, &STAT) == -1)
+			break;
+
+		DeleteFile(MsgFile);
+	}
+
+	for (i = 1; i <= RestartCount; i++)
+	{
+		RestartRec = RestartData[i];
+
+		if (RestartRec == 0)
+			return;				// Shouldn't happen!
+
+		if ((NOW - RestartRec->TimeCreated) > 86400 * 2)	// Max 2 days
+			continue;
+
+		sprintf_s(MsgFile, sizeof(MsgFile), "%s/%d", RestartDir, n++);
+
+		hFile = fopen(MsgFile, "wb");
+
+		if (hFile)
+		{
+			WriteLen = fwrite(RestartRec, 1, sizeof(struct FBBRestartData), hFile);		// Save Header	
+			WriteLen = fwrite(RestartRec->MailBuffer, 1, RestartRec->MailBufferSize, hFile); // Save Data
+			fclose(hFile);
+		}
+	}
+}
 VOID FBBputs(CIRCUIT * conn, char * buf)
 {
 	// Sends to user and logs
@@ -807,6 +937,11 @@ VOID FlagSentMessages(CIRCUIT * conn, struct UserInfo * user)
 				FBBHeader->FwdMsg->datechanged=time(NULL);
 			}
 
+#ifndef NOMQTT
+		if (MQTT)
+			MQTTMessageEvent(FBBHeader->FwdMsg);
+#endif
+
 			FBBHeader->FwdMsg->Locked = 0;	// Unlock
 			conn->UserPointer->ForwardingInfo->MsgCount--;
 		}
@@ -976,12 +1111,12 @@ loop:
 			{
 				RestartRec = RestartData[i];
 		
-				if ((RestartRec->UserPointer == conn->UserPointer)
-					&& (strcmp(RestartRec->TempMsg->bid, conn->TempMsg->bid) == 0))
+				if ((strcmp(RestartRec->Call, conn->UserPointer->Call) == 0)
+					&& (strcmp(RestartRec->bid, conn->TempMsg->bid) == 0))
 				{
-					if (RestartRec->TempMsg->length <= offset)
+					if (RestartRec->length <= offset)
 					{
-						conn->TempMsg->length = RestartRec->TempMsg->length;
+						conn->TempMsg->length = RestartRec->length;
 						conn->MailBuffer = RestartRec->MailBuffer;
 						conn->MailBufferSize = RestartRec->MailBufferSize;
 
@@ -1010,6 +1145,7 @@ loop:
 						RestartData[n] = RestartData[n+1];		// move down all following entries
 					}
 					RestartCount--;
+					SaveRestartData();
 				}
 			}
 
@@ -1137,6 +1273,7 @@ loop:
 			{
 #endif
 				conn->InputMode = 0;		//  So we won't save Restart data if decode fails
+				DeleteRestartData(conn);
 				Decode(conn, 0);			// Setup Next Message will reset InputMode if needed
 #ifndef LINBPQ
 			}
@@ -1836,14 +1973,14 @@ VOID SaveFBBBinary(CIRCUIT * conn)
 	{
 		RestartRec = RestartData[i];
 		
-		if ((RestartRec->UserPointer == conn->UserPointer)
-			&& (strcmp(RestartRec->TempMsg->bid, conn->TempMsg->bid) == 0))
+		if ((strcmp(RestartRec->Call, conn->UserPointer->Call) == 0)
+			&& (strcmp(RestartRec->bid, conn->TempMsg->bid) == 0))
 		{
-			// Fund it, so reuse
+			// Found it, so reuse
 
 			//	If we have more data, reset retry count
 
-			if (RestartRec->TempMsg->length < conn->TempMsg->length)
+			if (RestartRec->length < conn->TempMsg->length)
 				RestartRec->Count = 0;;
 
 			break;
@@ -1860,18 +1997,52 @@ VOID SaveFBBBinary(CIRCUIT * conn)
 		RestartData[RestartCount] = RestartRec;
 
 		FreeSemaphore(&AllocSemaphore);
+		RestartRec->TimeCreated = time(NULL);
 	}
 
-	RestartRec->UserPointer = conn->UserPointer;
-	RestartRec->TempMsg = conn->TempMsg;
+	strcpy(RestartRec->Call, conn->UserPointer->Call);
+	RestartRec->length = conn->TempMsg->length;
+	strcpy(RestartRec->bid, conn->TempMsg->bid);
 	RestartRec->MailBuffer = conn->MailBuffer;
 	RestartRec->MailBufferSize = conn->MailBufferSize;
 
 	len = sprintf_s(Msg, sizeof(Msg), "Disconnect received from %s during Binary Transfer - %d Bytes Saved for restart",
 		conn->Callsign, conn->TempMsg->length);
 
+	SaveRestartData();
+
 	WriteLogLine(conn, '|',Msg, len, LOG_BBS);
 }
+
+void DeleteRestartData(CIRCUIT * conn)
+{
+	struct FBBRestartData * RestartRec = NULL;
+	int i, n;
+
+	if (conn->TempMsg == NULL)
+		return;
+	
+	for (i = 1; i <= RestartCount; i++)
+	{
+		RestartRec = RestartData[i];
+		
+		if ((strcmp(RestartRec->Call, conn->UserPointer->Call) == 0)
+			&& (strcmp(RestartRec->bid, conn->TempMsg->bid) == 0))
+		{
+			// Remove restrt data
+
+			for (n = i; n < RestartCount; n++)
+			{
+				RestartData[n] = RestartData[n+1];		// move down all following entries
+			}
+				
+			RestartCount--;
+			SaveRestartData();
+			return;
+		}
+	}
+}
+
 
 BOOL LookupRestart(CIRCUIT * conn, struct FBBHeaderLine * FBBHeader)
 {
@@ -1886,8 +2057,8 @@ BOOL LookupRestart(CIRCUIT * conn, struct FBBHeaderLine * FBBHeader)
 	{
 		RestartRec = RestartData[i];
 		
-		if ((RestartRec->UserPointer == conn->UserPointer)
-			&& (strcmp(RestartRec->TempMsg->bid, FBBHeader->BID) == 0))
+		if ((strcmp(RestartRec->Call, conn->UserPointer->Call) == 0)
+			&& (strcmp(RestartRec->bid, FBBHeader->BID) == 0))
 		{
 			char Msg[120];
 			int len;
@@ -1909,15 +2080,16 @@ BOOL LookupRestart(CIRCUIT * conn, struct FBBHeaderLine * FBBHeader)
 				}
 				
 				RestartCount--;
+				SaveRestartData();
 				return FALSE;
 			}
 
 			len = sprintf_s(Msg, sizeof(Msg), "Restart Data found for %s - Requesting restart from %d",
-				FBBHeader->BID, RestartRec->TempMsg->length);
+				FBBHeader->BID, RestartRec->length);
 
 			WriteLogLine(conn, '|',Msg, len, LOG_BBS);
 
-			return (RestartRec->TempMsg->length);
+			return (RestartRec->length);
 		}
 	}
 

@@ -36,7 +36,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 #define SD_BOTH         0x02
 
 
-#include "CHeaders.h"
+#include "cheaders.h"
 #include "tncinfo.h"
 #include "bpq32.h"
 
@@ -622,7 +622,10 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 
 			if (_memicmp(buff->L2DATA, "RADIO ", 6) == 0)
 			{
-				sprintf(buff->L2DATA, "%d %s", TNC->Port, &buff->L2DATA[6]);
+				char cmd[56];
+
+				strcpy(cmd, &buff->L2DATA[6]);
+				sprintf(buff->L2DATA, "%d %s", TNC->Port, cmd);
 
 				if (Rig_Command(TNC->PortRecord->ATTACHEDSESSIONS[0]->L4CROSSLINK, buff->L2DATA))
 				{
@@ -971,13 +974,13 @@ void * V4ExtInit(EXTPORTDATA * PortEntry)
 	}
 
 	TNC->Port = port;
+	TNC->PortRecord = PortEntry;
 
 	if (TNC->ProgramPath)
 		TNC->WeStartedTNC = RestartTNC(TNC);
 
-	TNC->Hardware = H_V4;
+	TNC->PortRecord->PORTCONTROL.HWType = TNC->Hardware = H_V4;
 
-	TNC->PortRecord = PortEntry;
 
 	if (PortEntry->PORTCONTROL.PORTCALL[0] == 0)
 		memcpy(TNC->NodeCall, MYNODECALL, 10);
@@ -1273,7 +1276,7 @@ static VOID ProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 			{
 				char AppName[13];
 
-				memcpy(AppName, &ApplPtr[App * sizeof(CMDX)], 12);
+				memcpy(AppName, &ApplPtr[App * sizeof(struct CMDX)], 12);
 				AppName[12] = 0;
 
 				// Make sure app is available

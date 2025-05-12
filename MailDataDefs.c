@@ -43,6 +43,7 @@ struct SEM AllocSemaphore = {0, 0};
 struct SEM ConSemaphore = {0, 0};
 struct SEM Semaphore = {0, 0};
 struct SEM OutputSEM = {0, 0};
+struct SEM ConfigSEM = {0, 0};
 
 struct UserInfo ** UserRecPtr=NULL;
 int NumberofUsers=0;
@@ -132,7 +133,7 @@ char HRoute[100];
 char AMPRDomain[100];
 BOOL SendAMPRDirect = 0;
 
-char SignoffMsg[100];
+char SignoffMsg[120];
 
 char AbortedMsg[100]="\rOutput aborted\r";
 
@@ -204,6 +205,7 @@ int MailForInterval = 0;
 char zeros[NBMASK];						// For forward bitmask tests
 
 time_t MaintClock;						// Time to run housekeeping
+time_t APIClock;						// Time to sent to MOLTE's Database
 
 struct MsgInfo * MsgnotoMsg[100000];	// Message Number to Message Slot List.
 

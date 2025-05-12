@@ -3,7 +3,7 @@ Copyright 2001-2022 John Wiseman G8BPQ
 
 This file is part of LinBPQ/BPQ32.
 
-LinBPQ/BPQ32 is free software: you can redistribute it and/or modify
+LinBPQ/BPQ32 is free software: you can redistribute it and/or modifyextern int HTTP
 it under the terms of the GNU General Public License as published by
 the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
@@ -1086,7 +1086,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 //	Add ? and * wildcards to NODES command (74)
 //  Add Port RADIO config parameter (74)
 
-//  Version 6.0.24.1 August 2024
+//  Version 6.0.24.1 August 2023
 
 //	Apply NODES command wildcard to alias as well a call (2)
 //	Add STOPPORT/STARTPORT to VARA Driver (2)
@@ -1227,8 +1227,44 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 //	Allow interlocking of KISS and Session mode ports (eg ARDOP and VARA) (45)
 //	Add ARDOP UI Packets to MH (45)
 //	Add support for Qtsm Mgmt Interface (45)
-
-
+//	NodeAPI improvements (46)
+//	Add MQTT Interface (46)
+//	Fix buffer leak in ARDOP code(46)
+//	Fix possible crash if MQTT not in use (47)
+//	Add optional ATTACH time limit for VARA (48)
+//	API format fixes (48)
+//	AGWAPI Add protection against accidental connects from a non-agw application (50)
+//	Save MH and NODES every hour (51)
+//	Fix handling long unix device names (now max 250 bytes) (52)
+//	Fix error reporting in api update (53)
+//	Coding changes to remove some compiler warnings (53, 54)
+//	Add MQTT reporting of Mail Events (54)
+//	Fix beaconong on KISSHF ports (55)
+//	Fix MailAPI msgs endpoint
+//	Attempt to fix NC going to wrong application. (57)
+//	Improve ARDOP end of session code (58)
+//	Run M0LTE Map reporting in a separate thread (59/60)
+//	Add RHP support for WhatsPac (59)
+//  Add timestamps to LIS monitor (60)
+//	Fix problem with L4 frames being delivered out of sequence (60)
+//	Add Compression of Netrom connections (62)
+//	Improve handling of Locked Routes (62)
+//	Add L4 RESET (Paula G8PZT's extension to NETROM)
+//	Fix problem using SENDRAW from BPQMail (63)
+//	Fix compatibility with latest ardopcf (64)
+//	Fix bug in RHP socket timeout code (65)
+//	Fix L4 RTT (66)
+//	Fix RigConrol with Chanxx but no other settings (66)
+//	Add option to compress L2 frames (67)
+//	Sort Routes displays (67)
+//	Fix Ardop session premature close (70)
+//	Add timestamps to log entries in Web Driver windows (70)
+//	Generate stack backtrace if SIGSEGV or SIGABRT occur (Linux) (70)
+//	Remove some debug logging from L2 code (70)
+//	Fix compiling LinBPQ with nomqtt option (70)
+//	Improve handling of binary data in RHP interface (70)
+//	Fix sending KISS commands to multiport or multidropped TNCs (70)
+//	Add MHUV and MHLV commands (Verbose listing with timestamps in clock time) (70)
 
 #define CKernel
 
@@ -1369,6 +1405,9 @@ extern struct _LINKTABLE * LINKS;
 extern int	LINK_TABLE_LEN; 
 extern int	MAXLINKS;
 
+extern double LatFromLOC;
+extern double LonFromLOC;
+
 
 extern int BPQHOSTAPI();
 extern int INITIALISEPORTS();
@@ -1487,6 +1526,7 @@ VOID APRSClose();
 VOID CloseTNCEmulator();
 
 VOID Poll_AGW();
+void RHPPoll();
 BOOL AGWAPIInit();
 int AGWAPITerminate();
 
@@ -1505,7 +1545,9 @@ UINT Sem_edx = 0;
 UINT Sem_esi = 0;
 UINT Sem_edi = 0;
 
-void GetSemaphore(struct SEM * Semaphore, int ID);
+
+#define GetSemaphore(Semaphore,ID) _GetSemaphore(Semaphore, ID, __FILE__, __LINE__)
+void _GetSemaphore(struct SEM * Semaphore, int ID, char * File, int Line);
 void FreeSemaphore(struct SEM * Semaphore);
 
 DllExport void * BPQHOSTAPIPTR = &BPQHOSTAPI;
@@ -1853,8 +1895,8 @@ VOID MonitorThread(int x)
 		{
 			// It is stuck - try to release
 
-				Debugprintf ("Semaphore locked - Process ID = %d, Held By %d",
-					Semaphore.SemProcessID, SemHeldByAPI);
+				Debugprintf ("Semaphore locked - Process ID = %d, Held By %d from %s Line %d",
+					Semaphore.SemProcessID, SemHeldByAPI, Semaphore.File, Semaphore.Line);
 			
 			// Write a minidump
 
@@ -2275,6 +2317,7 @@ VOID TimerProcX()
 			Poll_AGW();
 
 		DRATSPoll();
+		RHPPoll();
 
 		CheckGuardZone();
 
@@ -3063,7 +3106,7 @@ SkipInit:
 
 		if (AttachedProcesses < 2)
 		{
-			if (AUTOSAVE == 1)
+			if (AUTOSAVE)
 				SaveNodes();
 			if (AUTOSAVEMH)
 				SaveMH();
@@ -6085,13 +6128,14 @@ DllExport BOOL APIENTRY SaveReg(char * KeyIn, HANDLE hFile)
 						{
 							if (len > 76)
 							{
-								len = sprintf(RegLine, "%s\\\r\n", RegLine);
+								len += sprintf(&RegLine[len], "\\\r\n", RegLine);
+								strcat(RegLine, "\\\r\n");
 								WriteFile(hFile, RegLine, len, &written, NULL);
 								strcpy(RegLine, "  ");
 								len = 2;
 							}
 
-							len = sprintf(RegLine, "%s%02x,", RegLine, Value[k]);
+							len += sprintf(&RegLine[len], "%02x,", Value[k]);
 						}
 						RegLine[--len] = 0x0d;
 						RegLine[++len] = 0x0a;	
@@ -6117,19 +6161,20 @@ DllExport BOOL APIENTRY SaveReg(char * KeyIn, HANDLE hFile)
 						{
 							if (len > 76)
 							{
-								len = sprintf(RegLine, "%s\\\r\n", RegLine);
+								len += sprintf(&RegLine[len], "\\\r\n");
 								WriteFile(hFile, RegLine, len, &written, NULL);
 								strcpy(RegLine, "  ");
 								len = 2;
 							}
-							len = sprintf(RegLine, "%s%02x,", RegLine, Value[k]);
+
+							len += sprintf(&RegLine[len], "%02x,", Value[k]);
 							if (len > 76)
 							{
-								len = sprintf(RegLine, "%s\\\r\n", RegLine);
+								len += sprintf(&RegLine[len], "\\\r\n");
 								WriteFile(hFile, RegLine, len, &written, NULL);
 								strcpy(RegLine, "  ");
 							}
-							len = sprintf(RegLine, "%s00,", RegLine);
+							len += sprintf(&RegLine[len], "00,");
 						}
 
 						RegLine[--len] = 0x0d;
@@ -6616,10 +6661,18 @@ int GetListeningPortsPID(int Port)
 	return 0;			// Not found
 }
 
-DllExport char *  APIENTRY GetLOC()
+DllExport char * APIENTRY GetLOC()
 {
 	return LOC;
 }
+
+DllExport void  APIENTRY GetLatLon(double * lat, double * lon)
+{
+	*lat = LatFromLOC;
+	*lon = LonFromLOC;
+	return;
+}
+
 
 // UZ7HO Dll PTT interface
 

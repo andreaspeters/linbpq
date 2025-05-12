@@ -28,6 +28,10 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 #include <sys/time.h>
 #endif
 
+#define GetSemaphore(Semaphore,ID) _GetSemaphore(Semaphore, ID, __FILE__, __LINE__)
+void _GetSemaphore(struct SEM * Semaphore, int ID, char * File, int Line);
+
+BOOL GetStringValue(config_setting_t * group, char * name, char * value, int maxlen);
 
 BOOL Bells;
 BOOL FlashOnBell;		// Flash instead of Beep
@@ -50,6 +54,8 @@ FBBFilter * Filters = NULL;
 extern struct ConsoleInfo BBSConsole;
 
 extern char LOC[7];
+
+extern BOOL MQTT;
 
 //#define BBSIDLETIME 120
 //#define USERIDLETIME 300
@@ -75,7 +81,7 @@ FARPROCX pRefreshWebMailIndex;
 Dll BOOL APIENTRY APISendAPRSMessage(char * Text, char * ToCall);
 VOID APIENTRY md5 (char *arg, unsigned char * checksum);
 int APIENTRY GetRaw(int stream, char * msg, int * len, int * count);
-void GetSemaphore(struct SEM * Semaphore, int ID);
+void _GetSemaphore(struct SEM * Semaphore, int ID, char * File, int Line);
 void FreeSemaphore(struct SEM * Semaphore);
 int EncryptPass(char * Pass, char * Encrypt);
 VOID DecryptPass(char * Encrypt, unsigned char * Pass, unsigned int len);
@@ -126,6 +132,7 @@ int32_t Encode(char * in, char * out, int32_t inlen, BOOL B1Protocol, int Compre
 int APIENTRY ChangeSessionCallsign(int Stream, unsigned char * AXCall);
 void SendMessageReadEvent(char * call, struct MsgInfo * Msg);
 void SendNewMessageEvent(char * call, struct MsgInfo * Msg);
+void MQTTMessageEvent(struct MsgInfo * message);
 
 config_t cfg;
 config_setting_t * group;
@@ -268,6 +275,8 @@ time_t LastLogTime[4] = {0, 0, 0, 0};
 char FilesNames[4][100] = {"", "", "", ""};
 
 char * Logs[4] = {"BBS", "CHAT", "TCP", "DEBUG"};
+
+extern struct SEM ConfigSEM;
 
 
 BOOL OpenLogfile(int Flags)
@@ -2076,6 +2085,7 @@ hold certain types or sizes of messages.
 
 The first letter of each valid line specifies the action :
 
+A = Accept	   : Message is accepted without checking other filters
 R = Reject     : The message will not be received.
 H = Hold       : The message will be received but held until the sysop reviews.
 L = Local Hold : Only messages created on this BBS will be held.
@@ -2170,21 +2180,38 @@ BOOL CheckRejFilters(char * From, char * To, char * ATBBS, char * BID, char Type
 
 	while (p)
 	{
-		if (p->Action != 'R')
+		if (p->Action != 'R' && p->Action != 'A')
 			goto Continue;
 
 		if (p->Type != Type && p->Type != '*')
 			goto Continue;
 
+		// wildcardcompare returns true on a match
+
 		if (wildcardcompare(From, p->From) == 0)
 			goto Continue;
 
-		if (wildcardcompare(ToCopy, p->TO) == 0)
-			goto Continue;
+		if (p->TO[0] == '!')
+		{
+			if (wildcardcompare(ToCopy, &p->TO[1]) == 1)
+				goto Continue;
+		}
+		else
+		{
+			if (wildcardcompare(ToCopy, p->TO) == 0)
+				goto Continue;
+		}
 
 		if (ATBBS)
-			if (wildcardcompare(ATBBS, p->AT) == 0)
+		{
+			char AtCopy[256];
+			
+			strcpy(AtCopy, ATBBS);
+			_strupr(AtCopy);
+
+			if (wildcardcompare(AtCopy, p->AT) == 0)
 				goto Continue;
+		}
 
 		if (BID)
 			if (wildcardcompare(BID, p->BID) == 0)
@@ -2192,6 +2219,11 @@ BOOL CheckRejFilters(char * From, char * To, char * ATBBS, char * BID, char Type
 
 		if (p->MaxLen && Len < p->MaxLen)
 			goto Continue;
+
+		// if type 'A' matches all rules then accept without checking rest
+
+		if (p->Action == 'A')
+			return FALSE;
 
 		return TRUE;			// Hold
 
@@ -2209,7 +2241,7 @@ BOOL CheckValidCall(char * From)
 	if (DontCheckFromCall)
 		return TRUE;
 	
-	if (strcmp(From, "SYSOP") == 0 || strcmp(From, "SYSTEM") == 0 || 
+	if (strcmp(From, "SYSOP") == 0 || strcmp(From, "SYSTEM") == 0 || strcmp(From, "SERVIC") == 0 || 
 		strcmp(From, "IMPORT") == 0 || strcmp(From, "SMTP:") == 0 || strcmp(From, "RMS:") == 0)
 		return TRUE;
 
@@ -2235,6 +2267,7 @@ BOOL CheckHoldFilters(struct MsgInfo * Msg, char * From, char * To, char * ATBBS
 {
 	char ** Calls;
 	FBBFilter * p = Filters;
+	char ToCopy[256];
 
 	if (HoldFrom && From)
 	{
@@ -2298,6 +2331,9 @@ BOOL CheckHoldFilters(struct MsgInfo * Msg, char * From, char * To, char * ATBBS
 
 	// check fbb reject.sys type filters
 
+	strcpy(ToCopy, To);
+	_strupr(ToCopy);
+
 	while (p)
 	{
 		if (p->Action != 'H')
@@ -2309,9 +2345,16 @@ BOOL CheckHoldFilters(struct MsgInfo * Msg, char * From, char * To, char * ATBBS
 		if (wildcardcompare(Msg->from, p->From) == 0)
 			goto Continue;
 
-		if (wildcardcompare(Msg->to, p->TO) == 0)
-			goto Continue;
-
+		if (p->TO[0] == '!')
+		{
+			if (wildcardcompare(ToCopy, &p->TO[1]) == 1)
+				goto Continue;
+		}
+		else
+		{
+			if (wildcardcompare(ToCopy, p->TO) == 0)
+				goto Continue;
+		}
 		if (wildcardcompare(Msg->via, p->AT) == 0)
 			goto Continue;
 
@@ -3379,6 +3422,7 @@ void Flush(CIRCUIT * conn)
 					
 					SendUnbuffered(conn->BPQStream, &conn->OutputQueue[conn->OutputGetPointer], len);
 					conn->OutputGetPointer+=len;
+					conn->bytesSent += len;
 					tosend-=len;
 					SendUnbuffered(conn->BPQStream, "<A>bort, <CR> Continue..>", 25);
 					FreeSemaphore(&OutputSEM);
@@ -3390,6 +3434,7 @@ void Flush(CIRCUIT * conn)
 		}
 
 		SendUnbuffered(conn->BPQStream, &conn->OutputQueue[conn->OutputGetPointer], len);
+		conn->bytesSent += len;
 
 		conn->OutputGetPointer+=len;
 
@@ -3450,6 +3495,11 @@ VOID FlagAsKilled(struct MsgInfo * Msg, BOOL SaveDB)
 	if (SaveDB)
 		SaveMessageDatabase();
 	RebuildNNTPList();
+#ifndef NOMQTT
+	if (MQTT)
+		MQTTMessageEvent(Msg);
+#endif
+
 }
 
 void DoDeliveredCommand(CIRCUIT * conn, struct UserInfo * user, char * Cmd, char * Arg1, char * Context)
@@ -4894,6 +4944,10 @@ sendEOM:
 					Msg->datechanged=time(NULL);
 					SaveMessageDatabase();
 					SendMessageReadEvent(user->Call, Msg);
+#ifndef NOMQTT
+					if (MQTT)
+						MQTTMessageEvent(Msg);
+#endif
 				}
 			}
 		}
@@ -5564,14 +5618,19 @@ BOOL CreateMessage(CIRCUIT * conn, char * From, char * ToCall, char * ATBBS, cha
 	{
 		if (_memicmp(ToCall, "rms:", 4) == 0)
 		{
-			if (!FindRMS())
-			{
-				nodeprintf(conn, "*** Error - Forwarding via RMS is not configured on this BBS\r");
-				return FALSE;
-			}
+			// Could be ampr.org message 
 
+			if (!isAMPRMsg(ToCall))
+			{
+				if (!FindRMS())
+				{
+					nodeprintf(conn, "*** Error - Forwarding via RMS is not configured on this BBS\r");
+					return FALSE;
+				}
+			}
 			via=strlop(ToCall, ':');
 			_strupr(ToCall);
+
 		}
 		else if (_memicmp(ToCall, "rms/", 4) == 0)
 		{
@@ -5787,12 +5846,12 @@ VOID ProcessMsgLine(CIRCUIT * conn, struct UserInfo * user, char* Buffer, int ms
 						}
 						else
 						{
-							ToLen = sprintf(ToString, "%sTo: %s\r\n", ToString, Addr);
+							ToLen = sprintf(&ToString[strlen(ToString)], "To: %s\r\n", Addr);
 							continue;
 						}
 					}
 
-					ToLen = sprintf(ToString, "%sTo: %s@%s\r\n", ToString, Addr, Via);
+					ToLen = sprintf(&ToString[strlen(ToString)], "To: %s@%s\r\n", Addr, Via);
 					continue;
 				}
 
@@ -5810,7 +5869,7 @@ VOID ProcessMsgLine(CIRCUIT * conn, struct UserInfo * user, char* Buffer, int ms
 					}
 					else
 					{
-						ToLen = sprintf(ToString, "%sTo: %s\r\n", ToString, Addr);
+						ToLen = sprintf(&ToString[strlen(ToString)], "To: %s\r\n", Addr);
 
 						// Add to B2 Message for RMS
 
@@ -6450,6 +6509,10 @@ nextline:
 	user = LookupCall(Msg->to);
 
 	SendNewMessageEvent(user->Call, Msg);
+#ifndef NOMQTT
+	if (MQTT)
+		MQTTMessageEvent(Msg);
+#endif
 
 	if (EnableUI)
 #ifdef LINBPQ
@@ -6549,8 +6612,6 @@ VOID CreateMessageFile(ConnectionInfo * conn, struct MsgInfo * Msg)
 	}
 	return;
 }
-
-
 
 
 VOID SendUnbuffered(int stream, char * msg, int len)
@@ -6875,7 +6936,7 @@ int CountMessagestoForward (struct UserInfo * user)
 		if ((Msg->status != 'H') && (Msg->status != 'D') && Msg->type && check_fwd_bit(Msg->fbbs, BBSNumber))
 		{
 			n++;
-			continue;			// So we dont count twice in Flag set and NTS MPS
+			continue;			// So we dont count twice if Flag set and NTS MPS
 		}
 
 		// if an NTS MPS, also check for any matches
@@ -6907,6 +6968,66 @@ int CountMessagestoForward (struct UserInfo * user)
 				if (depth > -1 && Msg->Locked == 0)
 				{
 					n++;
+					continue;
+				}
+			}
+		}
+	}
+
+	return n;
+}
+
+int CountBytestoForward (struct UserInfo * user)
+{
+	// See if any messages are queued for this BBS. If so return total bytes queued
+
+	int m, n=0;
+	struct MsgInfo * Msg;
+	int BBSNumber = user->BBSNumber;
+	int FirstMessage = FirstMessageIndextoForward;
+
+	if ((user->flags & F_NTSMPS))
+		FirstMessage = 1;
+
+	for (m = FirstMessage; m <= NumberofMessages; m++)
+	{
+		Msg=MsgHddrPtr[m];
+
+		if ((Msg->status != 'H') && (Msg->status != 'D') && Msg->type && check_fwd_bit(Msg->fbbs, BBSNumber))
+		{
+			n += Msg->length;
+			continue;			// So we dont count twice if Flag set and NTS MPS
+		}
+
+		// if an NTS MPS, also check for any matches
+
+		if (Msg->type == 'T' && (user->flags & F_NTSMPS))
+		{
+			struct BBSForwardingInfo * ForwardingInfo = user->ForwardingInfo;
+			int depth;
+				
+			if (Msg->status == 'N' && ForwardingInfo)
+			{
+				depth = CheckBBSToForNTS(Msg, ForwardingInfo);
+
+				if (depth > -1 && Msg->Locked == 0)
+				{
+					n += Msg->length;
+					continue;
+				}						
+				depth = CheckBBSAtList(Msg, ForwardingInfo, Msg->via);
+
+				if (depth && Msg->Locked == 0)
+				{
+					n += Msg->length;
+					continue;
+				}						
+
+				depth = CheckBBSATListWildCarded(Msg, ForwardingInfo, Msg->via);
+
+				if (depth > -1 && Msg->Locked == 0)
+				{
+					n += Msg->length;
 					continue;
 				}
 			}
@@ -7219,7 +7340,7 @@ VOID SetupForwardingStruct(struct UserInfo * user)
 			if (ForwardingInfo->ConTimeout == 0)
 				ForwardingInfo->ConTimeout = 120;
 
-			GetStringValue(group, "BBSHA", Temp);
+			GetStringValue(group, "BBSHA", Temp, 100);
 		
 			if (Temp[0])
 				ForwardingInfo->BBSHA = _strdup(Temp);
@@ -8134,6 +8255,15 @@ BOOL ProcessBBSConnectScript(CIRCUIT * conn, char * Buffer, int len)
 		{
 			n++;
 			Line = Scripts[n];
+		}
+
+		if (Line == NULL)
+		{
+			// No more lines - Disconnect
+
+			conn->BBSFlags &= ~RunningConnectScript;	// so it doesn't get reentered
+			Disconnect(conn->BPQStream);
+			return FALSE;
 		}
 
 		if (_memicmp(Line, "TIMES", 5) == 0)
@@ -9522,6 +9652,8 @@ VOID SaveConfig(char * ConfigName)
 	char FBBString[8192]= "";
 	FBBFilter * p = Filters;
 	char * ptr = FBBString;
+	
+	GetSemaphore(&ConfigSEM, 60);
 
 	if (configSaved == 0)
 	{
@@ -9945,10 +10077,11 @@ VOID SaveConfig(char * ConfigName)
 
 #ifdef LINBPQ
 
-	if(! config_write_file(&cfg,"/dev/shm/linmail.cfg.temp" ))
+	if(!config_write_file(&cfg,"/dev/shm/linmail.cfg.temp" ))
 	{
 		print("Error while writing file.\n");
 		config_destroy(&cfg);
+		FreeSemaphore(&ConfigSEM);
 		return;
 	}
 
@@ -9960,6 +10093,8 @@ VOID SaveConfig(char * ConfigName)
 	{
 		fprintf(stderr, "Error while writing file.\n");
 		config_destroy(&cfg);
+		FreeSemaphore(&ConfigSEM);
+
 		return;
 	}
 
@@ -9988,6 +10123,8 @@ VOID SaveConfig(char * ConfigName)
 	}
 #endif
 */
+
+	FreeSemaphore(&ConfigSEM);
 }
 
 int GetIntValue(config_setting_t * group, char * name)
@@ -10037,15 +10174,20 @@ int GetIntValueWithDefault(config_setting_t * group, char * name, int Default)
 }
 
 
-BOOL GetStringValue(config_setting_t * group, char * name, char * value)
+BOOL GetStringValue(config_setting_t * group, char * name, char * value, int maxlen)
 {
-	const char * str;
+	char * str;
 	config_setting_t *setting;
 
 	setting = config_setting_get_member (group, name);
 	if (setting)
 	{
-		str =  config_setting_get_string (setting);
+		str =  (char *)config_setting_get_string (setting);
+		if (strlen(str) > maxlen)
+		{
+			Debugprintf("Suspect config record %s", str);
+			str[maxlen] = 0;
+		}
 		strcpy(value, str);
 		return TRUE;
 	}
@@ -10058,7 +10200,6 @@ BOOL GetConfig(char * ConfigName)
 	int i;
 	char Size[80];
 	config_setting_t *setting;
-	const char * ptr;
 	char * ptr1;
 	char FBBString[8192]= "";
 	FBBFilter f;
@@ -10123,25 +10264,24 @@ BOOL GetConfig(char * ConfigName)
 
 	Localtime =  GetIntValue(group, "Localtime");
 	AliasText = GetMultiStringValue(group, "FWDAliases");
-	GetStringValue(group, "BBSName", BBSName);
-	GetStringValue(group, "MailForText", MailForText);
-	GetStringValue(group, "SYSOPCall", SYSOPCall);
-	GetStringValue(group, "H-Route", HRoute);
-	GetStringValue(group, "AMPRDomain", AMPRDomain);
+	GetStringValue(group, "BBSName", BBSName, 100);
+	GetStringValue(group, "MailForText", MailForText, 100);
+	GetStringValue(group, "SYSOPCall", SYSOPCall, 100);
+	GetStringValue(group, "H-Route", HRoute, 100);
+	GetStringValue(group, "AMPRDomain", AMPRDomain, 100);
 	SendAMPRDirect = GetIntValue(group, "SendAMPRDirect");
 	ISP_Gateway_Enabled =  GetIntValue(group, "SMTPGatewayEnabled");
 	ISPPOP3Interval =  GetIntValue(group, "POP3PollingInterval");
-	GetStringValue(group, "MyDomain", MyDomain);
-	GetStringValue(group, "ISPSMTPName", ISPSMTPName);
-	GetStringValue(group, "ISPPOP3Name", ISPPOP3Name);
+	GetStringValue(group, "MyDomain", MyDomain, 50);
+	GetStringValue(group, "ISPSMTPName", ISPSMTPName, 50);
+	GetStringValue(group, "ISPPOP3Name", ISPPOP3Name, 50);
 	ISPSMTPPort = GetIntValue(group, "ISPSMTPPort");
 	ISPPOP3Port = GetIntValue(group, "ISPPOP3Port");
-	GetStringValue(group, "ISPAccountName", ISPAccountName);
-	GetStringValue(group, "ISPAccountPass", EncryptedISPAccountPass);
-	GetStringValue(group, "ISPAccountName", ISPAccountName);
+	GetStringValue(group, "ISPAccountName", ISPAccountName, 50);
+	GetStringValue(group, "ISPAccountPass", EncryptedISPAccountPass, 100);
 
 	sprintf(SignoffMsg, "73 de %s\r", BBSName);					// Default
-	GetStringValue(group, "SignoffMsg", SignoffMsg);
+	GetStringValue(group, "SignoffMsg", SignoffMsg, 50);
 
 	DecryptPass(EncryptedISPAccountPass, ISPAccountPass, (int)strlen(EncryptedISPAccountPass));
 
@@ -10153,10 +10293,10 @@ BOOL GetConfig(char * ConfigName)
 
 #ifndef LINBPQ
 
-	GetStringValue(group, "MonitorSize", Size);
+	GetStringValue(group, "MonitorSize", Size, sizeof(Size));
 	sscanf(Size,"%d,%d,%d,%d,%d",&MonitorRect.left,&MonitorRect.right,&MonitorRect.top,&MonitorRect.bottom,&OpenMon);
 	
-	GetStringValue(group, "WindowSize", Size);
+	GetStringValue(group, "WindowSize", Size, sizeof(Size));
 	sscanf(Size,"%d,%d,%d,%d",&MainRect.left,&MainRect.right,&MainRect.top,&MainRect.bottom);
 
 	Bells = GetIntValue(group, "Bells");
@@ -10169,7 +10309,7 @@ BOOL GetConfig(char * ConfigName)
 	WrapInput = GetIntValue(group, "WrapInput");			
 	FlashOnConnect = GetIntValue(group, "FlashOnConnect");			
 	
-	GetStringValue(group, "ConsoleSize", Size);
+	GetStringValue(group, "ConsoleSize", Size, 80);
 	sscanf(Size,"%d,%d,%d,%d,%d", &ConsoleRect.left, &ConsoleRect.right,
 			&ConsoleRect.top, &ConsoleRect.bottom,&OpenConsole);
 
@@ -10181,8 +10321,7 @@ BOOL GetConfig(char * ConfigName)
 
 	if (setting && setting->value.sval[0])
 	{
-		ptr =  config_setting_get_string (setting);
-		WelcomeMsg = _strdup(ptr);
+		WelcomeMsg = _strdup(config_setting_get_string (setting));
 	}
 	else
 		WelcomeMsg = _strdup("Hello $I. Latest Message is $L, Last listed is $Z\r\n");
@@ -10191,10 +10330,7 @@ BOOL GetConfig(char * ConfigName)
 	setting = config_setting_get_member (group, "NewUserWelcomeMsg");
 	
 	if (setting && setting->value.sval[0])
-	{
-		ptr =  config_setting_get_string (setting);
-		NewWelcomeMsg = _strdup(ptr);
-	}
+		NewWelcomeMsg = _strdup(config_setting_get_string (setting));
 	else
 		NewWelcomeMsg = _strdup("Hello $I. Latest Message is $L, Last listed is $Z\r\n");
 
@@ -10202,10 +10338,7 @@ BOOL GetConfig(char * ConfigName)
 	setting = config_setting_get_member (group, "ExpertWelcomeMsg");
 	
 	if (setting && setting->value.sval[0])
-	{
-		ptr =  config_setting_get_string (setting);
-		ExpertWelcomeMsg = _strdup(ptr);
-	}
+		ExpertWelcomeMsg = _strdup(config_setting_get_string (setting));
 	else
 		ExpertWelcomeMsg = _strdup("");
 
@@ -10214,10 +10347,7 @@ BOOL GetConfig(char * ConfigName)
 	setting = config_setting_get_member (group, "Prompt");
 	
 	if (setting && setting->value.sval[0])
-	{
-		ptr =  config_setting_get_string (setting);
-		Prompt = _strdup(ptr);
-	}
+		Prompt = _strdup(config_setting_get_string (setting));
 	else
 	{
 		Prompt = malloc(20);
@@ -10227,10 +10357,7 @@ BOOL GetConfig(char * ConfigName)
 	setting = config_setting_get_member (group, "NewUserPrompt");
 	
 	if (setting && setting->value.sval[0])
-	{
-		ptr =  config_setting_get_string (setting);
-		NewPrompt = _strdup(ptr);
-	}
+		NewPrompt = _strdup(config_setting_get_string (setting));
 	else
 	{
 		NewPrompt = malloc(20);
@@ -10240,10 +10367,7 @@ BOOL GetConfig(char * ConfigName)
 	setting = config_setting_get_member (group, "ExpertPrompt");
 	
 	if (setting && setting->value.sval[0])
-	{
-		ptr =  config_setting_get_string (setting);
-		ExpertPrompt = _strdup(ptr);
-	}
+		ExpertPrompt = _strdup(config_setting_get_string (setting));
 	else
 	{
 		ExpertPrompt = malloc(20);
@@ -10264,7 +10388,7 @@ BOOL GetConfig(char * ConfigName)
 
 		// Get FBB Filters
 
-	GetStringValue(group, "FBBFilters", FBBString);
+	GetStringValue(group, "FBBFilters", FBBString, sizeof(FBBString));
 
 	ptr1 = FBBString;
 
@@ -10350,8 +10474,8 @@ BOOL GetConfig(char * ConfigName)
 	SendWP = GetIntValue(group, "SendWP");
 	SendWPType = GetIntValue(group, "SendWPType");
 
-	GetStringValue(group, "SendWPTO", SendWPTO);
-	GetStringValue(group, "SendWPVIA", SendWPVIA);
+	GetStringValue(group, "SendWPTO", SendWPTO, sizeof(SendWPTO));
+	GetStringValue(group, "SendWPVIA", SendWPVIA, sizeof(SendWPVIA));
 
 	SendWPAddrs = GetMultiStringValue(group,  "SendWPAddrs"); 
 
@@ -10381,7 +10505,7 @@ BOOL GetConfig(char * ConfigName)
 		SendWPVIA[0] = 0;
 	}
 
-	GetStringValue(group, "Version", Size);
+	GetStringValue(group, "Version", Size, sizeof(Size));
 	sscanf(Size,"%d,%d,%d,%d", &LastVer[0], &LastVer[1], &LastVer[2], &LastVer[3]);
 
 	for (i =1 ; i <= GetNumberofPorts(); i++)
@@ -10399,7 +10523,7 @@ BOOL GetConfig(char * ConfigName)
 			UIHDDR[i] = GetIntValueWithDefault(group, "SendHDDR", UIEnabled[i]);
 			UINull[i] = GetIntValue(group, "SendNull");
 			Size[0] = 0;
-			GetStringValue(group, "Digis", Size);
+			GetStringValue(group, "Digis", Size, sizeof(Size));
 			if (Size[0])
 				UIDigi[i] = _strdup(Size);
 		}
@@ -10464,7 +10588,7 @@ int Connected(int Stream)
 	char ConnectedMsg[] = "*** CONNECTED    ";
 	char Msg[100];
 	char Title[100];
-	int Freq = 0;
+	int64_t Freq = 0;
 	int Mode = 0;
 	BPQVECSTRUC * SESS;
 	TRANSPORTENTRY * Sess1 = NULL, * Sess2;	
@@ -10963,7 +11087,6 @@ int DoReceivedData(int Stream)
 		if (Stream == conn->BPQStream)
 		{
 			conn->SIDResponseTimer = 0;		// Got a message, so cancel timeout.
-
 			do
 			{ 
 				// May have several messages per packet, or message split over packets
@@ -10980,6 +11103,7 @@ int DoReceivedData(int Stream)
 				if (InputLen == 0 && conn->InputMode != 'Y')
 					return 0;
 
+				conn->bytesRxed += InputLen;
 				conn->InputLen += InputLen;
 
 				if (conn->InputLen == 0) return 0;
@@ -11698,6 +11822,11 @@ VOID ProcessTextFwdLine(ConnectionInfo * conn, struct UserInfo * user, char * Bu
 
 		SaveMessageDatabase();
 
+#ifndef NOMQTT
+		if (MQTT)
+			MQTTMessageEvent(conn->FwdMsg);
+#endif
+	
 		conn->UserPointer->ForwardingInfo->MsgCount--;
 
 		// See if any more to forward
@@ -15804,6 +15933,11 @@ void SendMessageReadEvent(char * call, struct MsgInfo * Msg)
 #endif
 	}
 }
+
+void SendMessageForwardedToM0LTE(char * call, struct MsgInfo * Msg)
+{
+}
+
 
 void SendNewMessageEvent(char * call, struct MsgInfo * Msg)
 {

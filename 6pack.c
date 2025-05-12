@@ -72,7 +72,7 @@ Using code from 6pack Linux Kernel driver with the following licence and credits
 
 #include "compatbits.h"
 #include <string.h>
-#include "CHeaders.h"
+#include "cheaders.h"
 
 #include "bpq32.h"
 
@@ -970,7 +970,7 @@ ok:
 				UCHAR * data = &buffptr->Data[0];
 				STREAM->FramesQueued--;
 				txlen = (int)buffptr->Len;
-				STREAM->BytesTXed += txlen;
+				STREAM->bytesTXed += txlen;
 
 				bytes=SerialSendData(TNC, data, txlen);
 				WritetoTrace(TNC, data, txlen);
@@ -1412,10 +1412,11 @@ VOID * SIXPACKExtInit(EXTPORTDATA * PortEntry)
 	TNC->sixPack = zalloc(sizeof(struct sixPackTNCInfo));
 
 	TNC->Port = port;
-	TNC->Hardware = H_SIXPACK;
+	TNC->PortRecord = PortEntry;
+	TNC->PortRecord->PORTCONTROL.HWType = TNC->Hardware = H_SIXPACK;
+
 	TNC->ARDOPBuffer = malloc(8192);
 
-	TNC->PortRecord = PortEntry;
 
 	if (PortEntry->PORTCONTROL.PORTCALL[0] == 0)
 		memcpy(TNC->NodeCall, MYNODECALL, 10);

@@ -36,7 +36,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 #endif
 
 
-#include "CHeaders.h"
+#include "cheaders.h"
 
 
 extern int (WINAPI FAR *GetModuleFileNameExPtr)();
@@ -142,7 +142,7 @@ loop:
 	return 1;
 }
 
-BOOL SerialReadConfigFile(int Port, int ProcLine())
+BOOL SerialReadConfigFile(int Port, int ProcLine(char * buf, int Port))
 {
 	char buf[256],errbuf[256];
 
@@ -402,7 +402,7 @@ ok:
 				UCHAR * data = &buffptr->Data[0];
 				STREAM->FramesQueued--;
 				txlen = (int)buffptr->Len;
-				STREAM->BytesTXed += txlen;
+				STREAM->bytesTXed += txlen;
 
 				bytes=SerialSendData(TNC, data, txlen);
 				WritetoTrace(TNC, data, txlen);
@@ -491,7 +491,7 @@ ok:
 
 			bytes=SerialSendData(TNC, TXMsg, txlen);
 			TNC->Streams[Stream].BytesOutstanding += bytes;		// So flow control works - will be updated by BUFFER response
-			STREAM->BytesTXed += bytes;
+			STREAM->bytesTXed += bytes;
 //			WritetoTrace(TNC, &buff->L2DATA[0], txlen);
 	
 			return 1;
@@ -508,9 +508,12 @@ ok:
 
 		if (_memicmp(&buff->L2DATA[0], "RADIO ", 6) == 0)
 		{
-			sprintf(&buff->L2DATA[0], "%d %s", TNC->Port, &buff->L2DATA[6]);
+			char cmd[56];
 
-			if (Rig_Command(TNC->PortRecord->ATTACHEDSESSIONS[0]->L4CROSSLINK, &buff->L2DATA[0]))
+			strcpy(cmd, &buff->L2DATA[6]);
+			sprintf(&buff->L2DATA[0], "%d %s", TNC->Port, cnd);
+
+				if (Rig_Command(TNC->PortRecord->ATTACHEDSESSIONS[0]->L4CROSSLINK, &buff->L2DATA[0]))
 			{
 			}
 			else
@@ -735,7 +738,7 @@ VOID SerialReleasePort(struct TNCINFO * TNC)
 VOID * SerialExtInit(EXTPORTDATA * PortEntry)
 {
 	int port;
-	char Msg[255];
+	char Msg[512];
 	char * ptr;
 	struct TNCINFO * TNC;
 	char * TempScript;
@@ -770,9 +773,9 @@ VOID * SerialExtInit(EXTPORTDATA * PortEntry)
 	}
 	
 	TNC->Port = port;
-	TNC->Hardware = H_SERIAL;
-
 	TNC->PortRecord = PortEntry;
+	TNC->PortRecord->PORTCONTROL.HWType = TNC->Hardware = H_SERIAL;
+
 
 	if (PortEntry->PORTCONTROL.PORTCALL[0] == 0)
 		memcpy(TNC->NodeCall, MYNODECALL, 10);

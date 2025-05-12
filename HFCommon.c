@@ -30,7 +30,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 
 #include "kernelresource.h"
-#include "CHeaders.h"
+#include "cheaders.h"
 #include "tncinfo.h"
 #ifndef LINBPQ
 #include <commctrl.h>
@@ -336,7 +336,8 @@ LRESULT CALLBACK PacWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
 }
 #endif
 
-BOOL CreatePactorWindow(struct TNCINFO * TNC, char * ClassName, char * WindowTitle, int RigControlRow, WNDPROC WndProc, int Width, int Height, VOID ForcedCloseProc())
+BOOL CreatePactorWindow(struct TNCINFO * TNC, char * ClassName, char * WindowTitle, int RigControlRow, WNDPROC WndProc, int Width, int Height,
+						VOID ForcedCloseProc(struct TNCINFO * TNC, int Stream))
 {
 #ifdef LINBPQ
 	return FALSE;
@@ -1602,7 +1603,7 @@ VOID ShowTraffic(struct TNCINFO * TNC)
 	char Status[80];
 
 	sprintf(Status, "RX %d TX %d ACKED %d ", 
-		TNC->Streams[0].BytesRXed, TNC->Streams[0].BytesTXed, TNC->Streams[0].BytesAcked);
+		TNC->Streams[0].bytesRXed, TNC->Streams[0].bytesTXed, TNC->Streams[0].BytesAcked);
 #ifndef LINBPQ
 	SetDlgItemText(TNC->hDlg, IDC_TRAFFIC, Status);
 #endif
@@ -1865,9 +1866,6 @@ static char ** SeparateMultiString(char * MultiString)
 	return Value;
 }
 
-
-
-
 extern int nextDummyInterlock;
 
 int standardParams(struct TNCINFO * TNC, char * buf)
@@ -1916,7 +1914,7 @@ int standardParams(struct TNCINFO * TNC, char * buf)
 		TNC->ActiveTXFreq = atof(&buf[13]);
 	else if (_memicmp(buf, "ActiveRXFreq", 12) == 0)	// Set at start of session
 		TNC->ActiveRXFreq = atof(&buf[13]);
-	else if (_memicmp(buf, "DisconnectScript", 16) == 0)	// Set at start of session
+	else if (_memicmp(buf, "DisconnectScript", 16) == 0)	// Set at end of session
 		TNC->DisconnectScript = SeparateMultiString(&buf[17]);
 	else if (_memicmp(buf, "PTTONHEX", 8) == 0)
 	{

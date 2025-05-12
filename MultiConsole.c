@@ -919,6 +919,9 @@ LRESULT APIENTRY InputProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 			DoRefresh(Cinfo);
 
+			Cinfo->Console->bytesRxed += Cinfo->kbptr+1;
+
+
 			if (Cinfo->Console->SysopChatStream)
 				SendUnbuffered(Cinfo->Console->SysopChatStream->BPQStream, &Cinfo->kbbuf[0], Cinfo->kbptr+1);
 			else

@@ -26,7 +26,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 */
 #define _CRT_SECURE_NO_DEPRECATE
 
-#include "CHeaders.h"
+#include "cheaders.h"
 
 #include "bpq32.h"
 
@@ -36,14 +36,14 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 struct AGWHeader
 {
-    int Port;
+    unsigned int Port;
 	unsigned char DataKind;
     unsigned char filler2;
 	unsigned char PID;
     unsigned char filler3;
     unsigned char callfrom[10];
     unsigned char callto[10];
-    int DataLength;
+    unsigned int DataLength;
     int reserved;
 };
 
@@ -128,7 +128,7 @@ int DataSocket_Write(struct AGWSocketConnectionInfo * sockptr, SOCKET sock);
 int AGWGetSessionKey(char * key, struct AGWSocketConnectionInfo * sockptr);
 int ProcessAGWCommand(struct AGWSocketConnectionInfo * sockptr);
 int SendDataToAppl(int Stream, byte * Buffer, int Length);
-int InternalAGWDecodeFrame(char * msg, char * buffer, int Stamp, int * FrameType, int useLocalTime, int doNodes);
+int InternalAGWDecodeFrame(char * msg, char * buffer, time_t Stamp, int * FrameType, int useLocalTime, int doNodes);
 int AGWDataSocket_Disconnect( struct AGWSocketConnectionInfo * sockptr);
 int SendRawPacket(struct AGWSocketConnectionInfo * sockptr, char *txmsg, int Length);
 int ShowApps();
@@ -402,7 +402,7 @@ int SetUpHostSessions()
 extern struct DATAMESSAGE * REPLYBUFFER;
 extern BOOL AGWActive;
 
-VOID SHOWAGW(TRANSPORTENTRY * Session, char * Bufferptr, char * CmdTail, CMDX * CMD)
+VOID SHOWAGW(TRANSPORTENTRY * Session, char * Bufferptr, char * CmdTail, struct CMDX * CMD)
 {
 	//	DISPLAY AGW Session Status
 	
@@ -563,10 +563,28 @@ int AGWConnected(struct BPQConnectionInfo * Con, int Stream)
 				(memcmp(sockptr->CallSign1, ApplCall, 10) == 0) || (memcmp(sockptr->CallSign2, ApplCall, 10) == 0))
 			{
 				// Create Key
-            
+
+				char callsign[10];
+				int port;
+				int sesstype;
+				int paclen;
+				int maxframe;
+				int l4window;
+
+           
 				keyptr=(byte *)&Con->CallKey;
 
-				*(keyptr++)='1';
+				// Try using the BPQ Port Number if a L2 connect, first free port number if not
+
+				GetConnectionInfo(Stream, callsign,
+										 &port, &sesstype, &paclen,
+										 &maxframe, &l4window);
+
+
+				if (port == 0)
+					port = 64;
+
+				*(keyptr++)='0' + port;
 				memcpy(keyptr, ApplCall, 10);
 				keyptr+=10;
 				memcpy(keyptr,ConnectingCall, 10);
@@ -686,8 +704,9 @@ int AGWDoMonitorData()
 	struct AGWSocketConnectionInfo * sockptr;	
 	byte AGWBuffer[1000];
 	int n;
-	int Stamp, Frametype;
+	int Frametype;
 	BOOL RXFlag;
+	time_t Stamp;
 
 	// Look for Monitor Data
 
@@ -708,7 +727,7 @@ int AGWDoMonitorData()
 			return 0;
 		}
 
-		Stamp = (UINT)monbuff->Timestamp;
+		Stamp = monbuff->Timestamp;
 
 		memcpy(Buffer, monbuff, RawLen);
 
@@ -998,6 +1017,7 @@ int AGWDataSocket_Read(struct AGWSocketConnectionInfo * sockptr, SOCKET sock)
 {
 	int i;
 	int DataLength;
+	struct AGWHeader * AGW = &sockptr->AGWRXHeader;
 
 	ioctlsocket(sock,FIONREAD,&DataLength);
 
@@ -1009,18 +1029,83 @@ int AGWDataSocket_Read(struct AGWSocketConnectionInfo * sockptr, SOCKET sock)
 		return 0;
 	}
 
+	if (DataLength < 36)		//         A header
+	{
+		// If we don't get a header within a few ms assume a rogue connection and close it
 
+		int n = 50;
+
+		while (n--)
+		{
+			Sleep(10);
+			ioctlsocket(sock,FIONREAD,&DataLength);
+			
+			if (DataLength >= 36)
+				break;
+		}
+
+		if (n < 1)
+		{
+			Debugprintf("Corrupt AGW Packet Received");
+			AGWDataSocket_Disconnect(sockptr);
+			return 0;			
+		}
+	}
+
+	// Have a header
+
+	i=recv(sock,(char *)&sockptr->AGWRXHeader, 36, 0);
+            
+	if (i == SOCKET_ERROR)
+	{
+		i=WSAGetLastError();
+		AGWDataSocket_Disconnect(sockptr);
+	}
+	
+	sockptr->MsgDataLength = sockptr->AGWRXHeader.DataLength;
+
+	// Validate packet to protect against accidental (or malicious!) connects from a non-agw application
+
+	if (AGW->Port > 64 || AGW->filler2 != 0 || AGW->filler3 != 0 || AGW->DataLength > 400)
+	{
+		Debugprintf("Corrupt AGW Packet Received");
+		AGWDataSocket_Disconnect(sockptr);
+		return 0;
+	}
+	
+	if (sockptr->MsgDataLength == 0)
+	   ProcessAGWCommand (sockptr);
+	else
+		sockptr->GotHeader = TRUE;			// Wait for data
+
+	ioctlsocket(sock,FIONREAD,&DataLength);	// See if more data
+			
 	if (sockptr->GotHeader)
 	{
 		// Received a header, without sufficient data bytes
    
 		if (DataLength < sockptr->MsgDataLength)
 		{
-			// Fiddle - seem to be problems somtimes with un-Neagled hosts
-        
-			Sleep(500);
+			// Fiddle - seem to be problems somtimes with un-Neagled hosts so wait a few ms
+			// if we don't get a full packet assume a rogue connection and close it
 
-			ioctlsocket(sock,FIONREAD,&DataLength);
+			int n = 50;
+
+			while (n--)
+			{
+				Sleep(10);
+				ioctlsocket(sock,FIONREAD,&DataLength);
+			
+				if (DataLength >= sockptr->MsgDataLength)
+					break;
+			}
+
+			if (n < 1)
+			{
+				Debugprintf("Corrupt AGW Packet Received");
+				AGWDataSocket_Disconnect(sockptr);
+				return 0;			
+			}
 		}
 		
 		if (DataLength >= sockptr->MsgDataLength)
@@ -1033,48 +1118,9 @@ int AGWDataSocket_Read(struct AGWSocketConnectionInfo * sockptr, SOCKET sock)
 
 			ProcessAGWCommand (sockptr);
 			free(sockptr->MsgData);
-        
 			sockptr->GotHeader = FALSE;
 		}
-
-		// Not Enough Data - wait
-
 	}
-	else	// Not got header
-	{
-		if (DataLength > 35)//         A header
-		{
-			i=recv(sock,(char *)&sockptr->AGWRXHeader, 36, 0);
-            
-			if (i == SOCKET_ERROR)
-			{
-				i=WSAGetLastError();
-
-				AGWDataSocket_Disconnect(sockptr);
-			}
-
-			
-			sockptr->MsgDataLength = sockptr->AGWRXHeader.DataLength;
-
-			if (sockptr->MsgDataLength > 500)
-				OutputDebugString("Corrupt AGW message");
-
-            
-		    if (sockptr->MsgDataLength == 0)
-			{
-				ProcessAGWCommand (sockptr);
-			}
-			else
-			{
-				sockptr->GotHeader = TRUE;            // Wait for data
-			}
-
-		} 
-		
-		// not got 36 bytes
-
-	}
-	
 	return 0;
 }
 
@@ -1096,6 +1142,7 @@ int ProcessAGWCommand(struct AGWSocketConnectionInfo * sockptr)
 	int con,conport;
 	int AGWYReply = 0;
 	int state, change;
+	int n;
 
 	// if we have hidden some ports then the port in the AGW packet will be an index into the visible ports,
 	// not the real port number
@@ -1150,7 +1197,7 @@ int ProcessAGWCommand(struct AGWSocketConnectionInfo * sockptr)
 
 			conport=GetPortNumber(VisiblePortToRealPort[key[0]-48]);
 
-			sprintf(ConnectMsg,"C %d %s",conport,ToCall);
+			n = sprintf(ConnectMsg,"C %d %s",conport,ToCall);
 
 			// if 'v' command add digis
 
@@ -1165,7 +1212,7 @@ int ProcessAGWCommand(struct AGWSocketConnectionInfo * sockptr)
 
 				while(nDigis--)
 				{
-					sprintf(ConnectMsg, "%s, %s", ConnectMsg, Digis);
+					n += sprintf(&ConnectMsg[n], " %s", Digis);
 					Digis += 10;
 				}
 			}

@@ -33,7 +33,7 @@
 #include "BPQMailrc.h"
 #include "dbghelp.h"
 #else
-#include "CHeaders.h"
+#include "cheaders.h"
 #endif
 
 #include "asmstrucs.h"
@@ -55,7 +55,7 @@ extern int ProgramErrors;
 extern struct _EXCEPTION_POINTERS exinfox;
 
 #ifdef WIN32
-Dump_Process_State(struct _EXCEPTION_POINTERS * exinfo, char * Msg);
+void Dump_Process_State(struct _EXCEPTION_POINTERS * exinfo, char * Msg);
 
 #define My__except_Routine(Message) \
 __except(memcpy(&exinfo, GetExceptionInformation(), sizeof(struct _EXCEPTION_POINTERS)), EXCEPTION_EXECUTE_HANDLER)\
@@ -290,6 +290,9 @@ typedef struct ConnectionInfo_S
 
 	struct ConnectionInfo_S * SysopChatStream;			// Stream sysop is chatting to
 
+	int bytesSent;
+	int bytesRxed;
+
 } ConnectionInfo, CIRCUIT;
 
 // Flags Equates
@@ -336,11 +339,13 @@ typedef struct ConnectionInfo_S
 
 struct FBBRestartData
 {
-	struct MsgInfo * TempMsg;		// Header while message is being received
-	struct UserInfo * UserPointer;
+	char Call[10];
+	char bid[13];
+	int length;
 	UCHAR * MailBuffer;				// Mail Message being received
 	int MailBufferSize;				// Total Malloc'ed size. Actual size in in Msg Struct
 	int Count;						// Give up if too many restarts
+	time_t TimeCreated;
 };
 
 //	We need to keep the B2Message file for B2 messages we are sending until the messages is acked, so
@@ -470,6 +475,8 @@ struct MsgStats
 struct UserInfo
 {
 	// New Format - with stats maintained by message type and unused fields removed.
+
+	//	This is no longer a fixed length record so can't be saved as a binarl
 
 	char	Call[10];			//	Connected call without SSID	
 
@@ -643,9 +650,9 @@ struct MsgInfo
 // For 64 bit time_t compatibility define as long long 
 // (so struct is same with 32 or 64 bit time_t)
 	
-	long long datereceived;
-	long long datecreated;
-	long long datechanged;
+	int64_t datereceived;
+	int64_t datecreated;
+	int64_t datechanged;
 
 	char	Spare[61 - 24];			//  For future use
 } ;
@@ -1171,7 +1178,7 @@ int ProcessConnecting(CIRCUIT * circuit, char * Buffer, int Len);
 VOID SaveConfig(char * ConfigName);
 BOOL GetConfig(char * ConfigName);
 int GetIntValue(config_setting_t * group, char * name);
-BOOL GetStringValue(config_setting_t * group, char * name, char * value);
+//BOOL GetStringValue(config_setting_t * group, char * name, char * value, int maxlen);
 BOOL GetConfigFromRegistry();
 VOID Parse_SID(CIRCUIT * conn, char * SID, int len);
 VOID ProcessMBLLine(CIRCUIT * conn, struct UserInfo * user, UCHAR* Buffer, int len);
@@ -1191,6 +1198,7 @@ BOOL FBBDoForward(CIRCUIT * conn);
 BOOL FindMessagestoForward(CIRCUIT * conn);
 BOOL SeeifMessagestoForward(int BBSNumber, CIRCUIT * Conn);
 int CountMessagestoForward(struct UserInfo * user);
+int CountBytestoForward(struct UserInfo * user);
 
 VOID * GetMultiLineDialogParam(HWND hDialog, int DLGItem);
 
@@ -1210,10 +1218,9 @@ VOID Do_Delete_User(HWND hDlg);
 VOID FlagSentMessages(CIRCUIT * conn, struct UserInfo * user);
 VOID HoldSentMessages(CIRCUIT * conn, struct UserInfo * user);
 VOID Do_Save_User(HWND hDlg, BOOL ShowBox);
-VOID DeleteBBS();
-VOID AddBBS();
+VOID DeleteBBS(struct UserInfo * user);
 VOID SaveBBSConfig();
-BOOL GetChatConfig();
+BOOL GetChatConfig(char * ConfigName);
 VOID SaveChatConfig();
 VOID SaveISPConfig();
 VOID SaveFWDConfig();
@@ -1287,7 +1294,9 @@ int RemoveLF(char * Message, int len);
 // Utilities
 
 BOOL isdigits(char * string);
-void GetSemaphore(struct SEM * Semaphore, int ID);
+
+
+void _GetSemaphore(struct SEM * Semaphore, int ID, char * File, int Line);
 void FreeSemaphore(struct SEM * Semaphore);
 
 VOID __cdecl Debugprintf(const char * format, ...);
@@ -1383,6 +1392,7 @@ BOOL CheckBBSHElements(struct MsgInfo * Msg, struct UserInfo * bbs, struct	BBSFo
 BOOL CheckBBSHElementsFlood(struct MsgInfo * Msg, struct UserInfo * bbs, struct	BBSForwardingInfo * ForwardingInfo, char * ATBBS, char ** HElements);
 int CheckBBSToForNTS(struct MsgInfo * Msg, struct BBSForwardingInfo * ForwardingInfo);
 int CheckBBSATListWildCarded(struct MsgInfo * Msg, struct BBSForwardingInfo * ForwardingInfo, char * ATBBS);
+void SaveRestartData();
 
 VOID ReRouteMessages();
 
@@ -1632,6 +1642,8 @@ extern BOOL NoWPGuesses;
 extern char ** SendWPAddrs;					// Replacers WP To and VIA
 
 extern BOOL DontCheckFromCall;
+
+extern time_t APIClock;;
 
 // YAPP stuff
 

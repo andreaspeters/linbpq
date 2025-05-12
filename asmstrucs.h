@@ -33,6 +33,7 @@ typedef int (FAR *FARPROCY)();
 #define L4BUSY	0x80		// BNA - DONT SEND ANY MORE
 #define L4NAK	0x40		// NEGATIVE RESPONSE FLAG
 #define L4MORE	0x20		// MORE DATA FOLLOWS - FRAGMENTATION FLAG
+#define L4COMP	0x10		// BPQ Specific use of spare it - data is compressed
 
 #define L4CREQ	1		// CONNECT REQUEST
 #define L4CACK	2		// CONNECT ACK
@@ -40,6 +41,7 @@ typedef int (FAR *FARPROCY)();
 #define L4DACK	4		// DISCONNECT ACK
 #define L4INFO	5		// INFORMATION
 #define L4IACK	6		// INFORMATION ACK
+#define L4RESET 7		// Paula's extension
 
 
 extern char MYCALL[];	// 7 chars, ax.25 format
@@ -62,15 +64,15 @@ extern int ENDOFDATA;
 extern int L3LIVES;
 extern int NUMBEROFNODES;
 
-typedef struct _CMDX
+struct CMDX
 {
 	char String[12];			// COMMAND STRING
 	UCHAR CMDLEN;				// SIGNIFICANT LENGTH
-	VOID (* CMDPROC)();			// COMMAND PROCESSOR
+//	VOID (*CMDPROC)(struct _TRANSPORTENTRY * Session, char * Bufferptr, char * CmdTail,  struct CMDX * CMD);// COMMAND PROCESSOR
+	VOID (*CMDPROC)();// COMMAND PROCESSOR
 	size_t CMDFLAG;				// FLAG/VALUE Offset
 
-} CMDX;
-
+};
 
 struct APPLCONFIG
 {
@@ -170,6 +172,21 @@ typedef struct _TRANSPORTENTRY
 	char APPL[16];				// Set if session initiated by an APPL
 	int L4LIMIT;				// Idle time for this Session
 
+	//	Now support compressing NetRom Sessions.
+	//	We collect as much data as possible before compressing and re-packetizing
+
+	int AllowCompress;	
+
+	unsigned char * unCompress;	// Data being saved to uncompress
+	int unCompressLen;
+
+	int Sent;
+	int SentAfterCompression;
+
+	int Received;
+	int ReceivedAfterExpansion;
+
+
 } TRANSPORTENTRY;
 
 //
@@ -194,6 +211,9 @@ typedef struct ROUTE
 	UCHAR NEIGHBOUR_PORT;
 	UCHAR NEIGHBOUR_QUAL;
 	UCHAR NEIGHBOUR_FLAG;		// SET IF 'LOCKED' ROUTE
+
+#define LOCKEDBYCONFIG 1
+#define	LOCKEDBYSYSOP 2
 
 	struct _LINKTABLE * NEIGHBOUR_LINK;		// POINTER TO LINK FOR THIS NEIGHBOUR
 
@@ -445,7 +465,8 @@ typedef struct NR_DEST_ROUTE_ENTRY
 	struct ROUTE * ROUT_NEIGHBOUR;	// POINTER TO NEXT NODE IN PATH
 	UCHAR ROUT_QUALITY;		// QUALITY
 	UCHAR ROUT_OBSCOUNT;
-	UCHAR Padding[5];		// SO Entries are the same length
+	UCHAR ROUT_LOCKED;
+	UCHAR Padding[4];		// SO Entries are the same length
 } *PNR_DEST_ROUTE_ENTRY;
 
 typedef struct DEST_ROUTE_ENTRY
@@ -467,12 +488,12 @@ typedef struct DEST_LIST
 	UCHAR DEST_ALIAS[6];	
 
 	UCHAR DEST_STATE;			// CONTROL BITS - SETTING UP, ACTIVE ETC	
+	UCHAR DEST_LOCKED;
 
 	UCHAR DEST_ROUTE;			// CURRENTY ACTIVE DESTINATION
 	UCHAR INP3FLAGS;
 
 	struct NR_DEST_ROUTE_ENTRY NRROUTE[3];// Best 3 NR neighbours for this dest
-
 	struct DEST_ROUTE_ENTRY ROUTE[3];	// Best 3 INP neighbours for this dest
 
 	void * DEST_Q;				// QUEUE OF FRAMES FOR THIS DESTINATION
@@ -547,14 +568,14 @@ typedef struct PORTCONTROL
 	PMESSAGE PORTRX_Q;			// FRAMES RECEIVED ON THIS PORT
 	PMESSAGE PORTTX_Q;			// FRAMES TO BE SENT ON THIS PORT
 	
-	void (FAR * PORTTXROUTINE)();	// POINTER TO TRANSMIT ROUTINE FOR THIS PORT
-	void (FAR * PORTRXROUTINE)();	// POINTER TO RECEIVE ROUTINE FOR THIS PORT
-	void (FAR * PORTINITCODE)();		// INITIALISATION ROUTINE
-	void (FAR * PORTTIMERCODE)();	//
-	void (FAR * PORTCLOSECODE)();	// CLOSE ROUTINE
-	int (FAR * PORTTXCHECKCODE)();	// OK to TX Check
-	BOOL (FAR * PORTSTOPCODE)();	// Temporarily Stop Port
-	BOOL (FAR * PORTSTARTCODE)();	// Restart Port
+	void (FAR * PORTTXROUTINE)(struct _EXTPORTDATA * PORTVEC, MESSAGE * Buffer);	// POINTER TO TRANSMIT ROUTINE FOR THIS PORT
+	void (FAR * PORTRXROUTINE)(struct _EXTPORTDATA * PORTVEC);	// POINTER TO RECEIVE ROUTINE FOR THIS PORT
+	void (FAR * PORTINITCODE)(struct PORTCONTROL * PortVector);		// INITIALISATION ROUTINE
+	void (FAR * PORTTIMERCODE)(struct PORTCONTROL * PortVector);	//
+	void (FAR * PORTCLOSECODE)(struct PORTCONTROL * PortVector);	// CLOSE ROUTINE
+	int (FAR * PORTTXCHECKCODE)(struct PORTCONTROL * PORTVEC, int Chan);	// OK to TX Check
+	BOOL (FAR * PORTSTOPCODE)(struct PORTCONTROL * PORT);	// Temporarily Stop Port
+	BOOL (FAR * PORTSTARTCODE)(struct PORTCONTROL * PORT);	// Restart Port
 	BOOL PortStopped;				// STOPPORT command used
 	BOOL PortSuspended;				// Suspended by interlock
 
@@ -678,10 +699,11 @@ typedef struct PORTCONTROL
 	BOOL IgnoreUnlocked;		// Ignore Unlocked routes
 	BOOL INP3ONLY;				// Default to INP3 and disallow NODES
 
-	FARPROCY UIHook;			// Used for KISSARQ
+	void (* UIHook)(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE * Buffer, MESSAGE * ADJBUFFER, UCHAR CTL, UCHAR MSGFLAG);			// Used for KISSARQ
 	struct PORTCONTROL * HookPort;
 	int PortSlot;				// Index in Port Table
 	struct TNCINFO * TNC;		// Associated TNC record
+	int HWType;					// Hardware type of Driver. In here as external apps don't have access to TNC record
 	int RIGPort;				// Linked port for freq resporting
 	unsigned int PERMITTEDAPPLS;	// Appls allowed on this port (generalisation of BBSBANNED)
 	char * CTEXT;				// Port Specific CText
@@ -756,7 +778,6 @@ typedef struct KISSINFO
 	int QtSMFreq;
 	int QtSMStats;				// Set if stats received as KISS Command 
 
-
 //	UCHAR WIN32INFO[16];		//	FOR WINDOWS DRIVER
 } *PKISSINFO;
 
@@ -767,7 +788,7 @@ typedef struct _EXTPORTDATA
 {
 	struct PORTCONTROL PORTCONTROL	;	// REMAP HARDWARE INFO
 
-	void * (* PORT_EXT_ADDR) ();		// ADDR OF RESIDENT ROUTINE
+	void * (* PORT_EXT_ADDR) (int fn, int port, PDATAMESSAGE buff);		// ADDR OF RESIDENT ROUTINE
 	char PORT_DLL_NAME[16];	
 	UCHAR EXTRESTART;					// FLAG FOR DRIVER REINIT
 	HINSTANCE DLLhandle;
@@ -880,6 +901,11 @@ typedef struct _LINKTABLE
 	UCHAR	OURCALL[7];		// CALLSIGN OF OUR END
 	UCHAR	DIGIS[56];		// LEVEL 2 DIGIS IN PATH
 
+	char callingCall[10];	// for reporting. Link and Our calls depand on which end connected
+	char receivingCall[10];	// for reporting. Link and Our calls depand on which end connected
+
+	char Direction[4];		// In or Out
+
 	PPORTCONTROL	LINKPORT;		// PORT NUMBER
 	UCHAR	LINKTYPE;		// 1 = UP, 2= DOWN, 3 = INTERNODE
 
@@ -926,6 +952,25 @@ typedef struct _LINKTABLE
 	VOID *	L2FRAG_Q;		// DEFRAGMENTATION QUEUE
 
 	int		IFrameRetryCounter;	// Number of times an I frame in repeated without a frame being acked 
+
+	time_t ConnectTime;		// For session stats
+	int bytesRXed;			// Info bytes only
+	int bytesTXed;
+
+	//	Now support compressing L2 Sessions.
+	//	We collect as much data as possible before compressing and re-packetizing
+
+	int AllowCompress;	
+
+	unsigned char * unCompress;	// Data being saved to uncompress
+	int unCompressLen;
+
+	int Sent;
+	int SentAfterCompression;
+
+	int Received;
+	int ReceivedAfterExpansion;
+
 
 } LINKTABLE;
 
@@ -1036,6 +1081,8 @@ struct SEM
 	int Rels;
 	DWORD SemProcessID;
 	DWORD SemThreadID;
+	int Line;		// caller file and line
+	char File[MAX_PATH];
 };
 
 
@@ -1320,6 +1367,7 @@ struct arp_table_entry
 //	SOCKET SourceSocket;
 	struct AXIPPORTINFO * PORT;
 	BOOL noUpdate;				// Don't update dest address from incoming packet
+	time_t LastHeard;			// Last Packet received from this ststiom
 };
 
 

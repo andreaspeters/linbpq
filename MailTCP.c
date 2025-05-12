@@ -1570,12 +1570,12 @@ VOID ProcessSMTPServerMessage(SocketConn * sockptr, char * Buffer, int Len)
 						if (CheckifLocalRMSUser(Addr)) // if local RMS - Leave Here
 							continue;
 						
-						ToLen = sprintf(ToString, "%sTo: %s\r\n", ToString, &Addr[4]);
+						ToLen = sprintf(&ToString[strlen(ToString)], "To: %s\r\n", &Addr[4]);
 						*sockptr->RecpTo[i] = 0;		// So we dont create individual one later
 						continue;
 					}
 
-					ToLen = sprintf(ToString, "%sTo: %s@%s\r\n", ToString, &Addr[4], Via);
+					ToLen = sprintf(&ToString[strlen(ToString)], "To: %s@%s\r\n", &Addr[4], Via);
 					*sockptr->RecpTo[i] = 0;			// So we dont create individual one later
 					continue;
 				}
@@ -1591,7 +1591,7 @@ VOID ProcessSMTPServerMessage(SocketConn * sockptr, char * Buffer, int Len)
 					if (CheckifLocalRMSUser(Addr)) // if local RMS - Leave Here
 						continue;
 					
-					ToLen = sprintf(ToString, "%sTo: %s\r\n", ToString, Addr);
+					ToLen = sprintf(&ToString[strlen(ToString)], "To: %s\r\n", Addr);
 					*sockptr->RecpTo[i] = 0;		// So we dont create individual one later
 
 					continue;
@@ -2656,6 +2656,7 @@ VOID ProcessPOP3ServerMessage(SocketConn * sockptr, char * Buffer, int Len)
 				// Must be some other coding
 
 				int code = TrytoGuessCode(msgbytes, Len);
+
 				UCHAR * UTF = malloc(Len * 3);
 
 				if (code == 437)
@@ -2895,6 +2896,8 @@ SocketConn * SMTPConnect(char * Host, int Port, BOOL AMPR, struct MsgInfo * Msg,
 	sinx.sin_family = AF_INET;
 	sinx.sin_addr.s_addr = INADDR_ANY;
 	sinx.sin_port = 0;
+
+	sockptr->Timeout = 0;
 
 	if (bind(sockptr->socket, (LPSOCKADDR) &sinx, addrlen) != 0 )
 	{
@@ -3589,7 +3592,6 @@ VOID ProcessPOP3ClientMessage(SocketConn * sockptr, char * Buffer, int Len)
 			if (sockptr->POP3MsgCount > sockptr->POP3MsgNum++)
 			{
 				sockprintf(sockptr, "RETR %d", sockptr->POP3MsgNum);
-
 				sockptr->State = WaitingForRETRResponse;
 			}
 			else

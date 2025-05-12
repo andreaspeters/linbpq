@@ -33,7 +33,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #pragma data_seg("_BPQDATA")
 				
-#include "CHeaders.h"
+#include "cheaders.h"
 #include "tncinfo.h"
 
 //	MSGFLAG contains CMD/RESPONSE BITS
@@ -61,7 +61,6 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #define	NODES_SIG	0xFF
 
-char * strlop(char * buf, char delim);
 UCHAR * DisplayINP3RIF(UCHAR * ptr1, UCHAR * ptr2, int msglen);
 
 static UCHAR * DISPLAY_NETROM(MESSAGE * ADJBUFFER, UCHAR * Output, int MsgLen, int DoNodes);
@@ -69,7 +68,7 @@ static UCHAR * DISPLAYIPDATAGRAM(IPMSG * IP, UCHAR * Output, int MsgLen);
 static UCHAR * DISPLAYARPDATAGRAM(UCHAR * Datagram, UCHAR * Output);
 
 
-int InternalAGWDecodeFrame(MESSAGE * msg, char * buffer, int Stamp, int * FrameType, int useLocalTime, int DoNodes)
+int InternalAGWDecodeFrame(MESSAGE * msg, char * buffer, time_t Stamp, int * FrameType, int useLocalTime, int DoNodes)
 {
 	UCHAR * ptr;
 	int n;
@@ -365,7 +364,7 @@ int InternalAGWDecodeFrame(MESSAGE * msg, char * buffer, int Stamp, int * FrameT
 	}
 
 	if (Output == NULL)
-		return NULL;
+		return 0;
 
 	if (Output[-1] != 13)
 		Output += sprintf((char *)Output, "\r");

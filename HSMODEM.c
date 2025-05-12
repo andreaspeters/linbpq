@@ -33,7 +33,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 #endif
 
 
-#include "CHeaders.h"
+#include "cheaders.h"
 
 #pragma pack(1)
 
@@ -309,46 +309,9 @@ loop:
 	return 1;
 }
 
-BOOL HSMODEMReadConfigFile(int Port, int ProcLine())
-{
-	char buf[256],errbuf[256];
-
-	Config = PortConfig[Port];
-
-	if (Config)
-	{
-		// Using config from bpq32.cfg
-
-		if (strlen(Config) == 0)
-		{
-			return TRUE;
-		}
-
-		ptr1 = Config;
-		ptr2 = strchr(ptr1, 13);
-
-		if (!ProcLine(buf, Port))
-		{
-			WritetoConsoleLocal("\n");
-			WritetoConsoleLocal("Bad config record ");
-			WritetoConsoleLocal(errbuf);
-		}
-	}
-	else
-	{
-		sprintf(buf," ** Error - No Configuration info in bpq32.cfg");
-		WritetoConsoleLocal(buf);
-	}
-
-	return (TRUE);
-}
-
-
-
 VOID SuspendOtherPorts(struct TNCINFO * ThisTNC);
 VOID ReleaseOtherPorts(struct TNCINFO * ThisTNC);
 VOID WritetoTrace(struct TNCINFO * TNC, char * Msg, int Len);
-
 
 static time_t ltime;
 
@@ -589,7 +552,7 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 				UCHAR * data = &buffptr->Data[0];
 				STREAM->FramesQueued--;
 				txlen = (int)buffptr->Len;
-				STREAM->BytesTXed += txlen;
+				STREAM->bytesTXed += txlen;
 
 				bytes=HSMODEMSendData(TNC, data, txlen);
 				WritetoTrace(TNC, data, txlen);
@@ -668,7 +631,7 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 
 			bytes=HSMODEMSendData(TNC, TXMsg, txlen);
 			TNC->Streams[Stream].BytesOutstanding += bytes;		// So flow control works - will be updated by BUFFER response
-			STREAM->BytesTXed += bytes;
+			STREAM->bytesTXed += bytes;
 //			WritetoTrace(TNC, &buff->L2DATA[0], txlen);
 	
 			return 1;
@@ -685,8 +648,12 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 
 		if (_memicmp(&buff->L2DATA[0], "RADIO ", 6) == 0)
 		{
-			sprintf(&buff->L2DATA[0], "%d %s", TNC->Port, &buff->L2DATA[6]);
+			char cmd[56];
 
+			strcpy(cmd, &buff->L2DATA[6]);
+			sprintf(&buff->L2DATA[0], "%d %s", TNC->Port, cmd);
+
+	
 			if (Rig_Command(TNC->PortRecord->ATTACHEDSESSIONS[0]->L4CROSSLINK, &buff->L2DATA[0]))
 			{
 			}
@@ -1214,9 +1181,9 @@ VOID * HSMODEMExtInit(EXTPORTDATA * PortEntry)
 	Consoleprintf("HSMODEM Host %s %d", TNC->HostName, TNC->TCPPort);
 
 	TNC->Port = port;
-	TNC->Hardware = H_HSMODEM;
-
 	TNC->PortRecord = PortEntry;
+
+	TNC->PortRecord->PORTCONTROL.HWType = TNC->Hardware = H_HSMODEM;
 
 	if (PortEntry->PORTCONTROL.PORTCALL[0] == 0)
 		memcpy(TNC->NodeCall, MYNODECALL, 10);

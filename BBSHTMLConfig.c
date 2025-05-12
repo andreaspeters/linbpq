@@ -19,7 +19,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #define _CRT_SECURE_NO_DEPRECATE
 
-#include "CHeaders.h"
+#include "cheaders.h"
 #include "bpqmail.h"
 
 #ifdef WIN32
@@ -116,7 +116,8 @@ int SendWebMailHeader(char * Reply, char * Key, struct HTTPConnectionInfo * Sess
 struct UserInfo * FindBBS(char * Name);
 void ReleaseWebMailStruct(WebMailInfo * WebMail);
 VOID TidyWelcomeMsg(char ** pPrompt);
-int MailAPIProcessHTTPMessage(char * response, char * Method, char * URL, char * request, BOOL LOCAL, char * Param);
+int MailAPIProcessHTTPMessage(struct HTTPConnectionInfo * Session, char * response, char * Method, char * URL, char * request, BOOL LOCAL, char * Param, char * Token);
+void UndoTransparency(char * input);
 
 char UNC[] = "";
 char CHKD[] = "checked=checked ";
@@ -186,7 +187,7 @@ char RefreshMainPage[] = "<html><head>"
 char StatusPage [] = 
 
 "<form style=\"font-family: monospace; text-align: center\"  method=post action=/Mail/DisSession?%s>"
-"<br>User&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Callsign&nbsp;&nbsp; Stream Queue<br>"
+"<br>User&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Callsign&nbsp;&nbsp; Stream &nbsp;Queue &nbsp;Sent &nbsp;Rxed<br>"
 "<select style=\"font-family: monospace;\" tabindex=1 size=10 name=call>";
 
 char StreamEnd[] = 
@@ -405,41 +406,20 @@ int SendHeader(char * Reply, char * Key)
 
 void ConvertTitletoUTF8(WebMailInfo * WebMail, char * Title, char * UTF8Title, int Len)
 {
-	if (WebIsUTF8(Title, (int)strlen(Title)) == FALSE)
+	Len = strlen(Title);
+
+	if (WebIsUTF8(Title, Len) == FALSE)
 	{
-		// With Windows it is simple - convert using current codepage
-		// I think the only reliable way is to convert to unicode and back
+		int code = TrytoGuessCode(Title, Len);
 
-		int origlen = (int)strlen(Title) + 1;
-#ifdef WIN32
-		WCHAR BufferW[128];
-		int wlen;
-		int len = origlen;
+		if (code == 437)
+			Len = Convert437toUTF8(Title, Len, UTF8Title);
+		else if (code == 1251)
+			Len = Convert1251toUTF8(Title, Len, UTF8Title);
+		else
+			Len = Convert1252toUTF8(Title, Len, UTF8Title);
 
-		wlen = MultiByteToWideChar(CP_ACP, 0, Title, len, BufferW, origlen * 2); 
-		len = WideCharToMultiByte(CP_UTF8, 0, BufferW, wlen, UTF8Title, origlen * 2, NULL, NULL); 
-#else
-		size_t left = Len - 1;
-		size_t len = origlen;
-
-		iconv_t * icu = WebMail->iconv_toUTF8;
-
-		if (WebMail->iconv_toUTF8 == NULL)
-			icu = WebMail->iconv_toUTF8 = iconv_open("UTF-8//IGNORE", "CP1252");
-
-		if (icu == (iconv_t)-1)
-		{
-			strcpy(UTF8Title, Title);
-			WebMail->iconv_toUTF8 = NULL;
-			return;
-		}
-
-		char * orig = UTF8Title;
-
-		iconv(icu, NULL, NULL, NULL, NULL);		// Reset State Machine
-		iconv(icu, &Title, &len, (char ** __restrict__)&UTF8Title, &left);
-
-#endif
+		UTF8Title[Len] = 0;
 	}
 	else
 		strcpy(UTF8Title, Title);
@@ -447,7 +427,7 @@ void ConvertTitletoUTF8(WebMailInfo * WebMail, char * Title, char * UTF8Title, i
 
 BOOL GotFirstMessage = 0;
 
-void ProcessMailHTTPMessage(struct HTTPConnectionInfo * Session, char * Method, char * URL, char * input, char * Reply, int * RLen, int InputLen)
+void ProcessMailHTTPMessage(struct HTTPConnectionInfo * Session, char * Method, char * URL, char * input, char * Reply, int * RLen, int InputLen, char * Token)
 {
 	char * Context = 0, * NodeURL;
 	int ReplyLen;
@@ -477,6 +457,13 @@ void ProcessMailHTTPMessage(struct HTTPConnectionInfo * Session, char * Method, 
 
 	}
 
+
+	if (_memicmp(URL, "/Mail/API/v1/", 13) == 0)
+	{
+		*RLen = MailAPIProcessHTTPMessage(Session, Reply, Method, URL, input, LOCAL, Context, Token);
+		return;
+	}
+
 	// There is a problem if Mail is reloaded without reloading the node
 
 	if (GotFirstMessage == 0)
@@ -491,12 +478,6 @@ void ProcessMailHTTPMessage(struct HTTPConnectionInfo * Session, char * Method, 
 		}
 		
 		GotFirstMessage = 1;
-		return;
-	}
-
-	if (_memicmp(URL, "/Mail/API/", 10) == 0)
-	{
-		*RLen = MailAPIProcessHTTPMessage(Reply, Method, URL, input, LOCAL, Context);
 		return;
 	}
 
@@ -1721,6 +1702,8 @@ VOID ProcessConfUpdate(struct HTTPConnectionInfo * Session, char * MsgPtr, char 
 		free(Filters);
 		Filters = NULL;
 
+		UndoTransparency(input);
+
 		while (input)
 		{
 			// extract and validate before saving
@@ -1734,7 +1717,7 @@ VOID ProcessConfUpdate(struct HTTPConnectionInfo * Session, char * MsgPtr, char 
 
 			input = strstr(input, "&Type=");
 			
-			if (Filter.Action == 'H' || Filter.Action == 'R')
+			if (Filter.Action == 'H' || Filter.Action == 'R' || Filter.Action == 'A')
 			{
 				Filter.Type = toupper(input[6]);
 				input = strstr(input, "&From=");
@@ -2239,21 +2222,21 @@ VOID ProcessUserUpdate(struct HTTPConnectionInfo * Session, char * MsgPtr, char 
 		ptr1 = GetNextParam(&ptr2);		// Last Listed
 		USER->lastmsg = atoi(ptr1);
 		ptr1 = GetNextParam(&ptr2);		// Name
-		strcpy(USER->Name, ptr1);
+		memcpy(USER->Name, ptr1, 17);
 		ptr1 = GetNextParam(&ptr2);		// Pass
-		strcpy(USER->pass, ptr1);		
+		memcpy(USER->pass, ptr1, 12);		
 		ptr1 = GetNextParam(&ptr2);		// CMS Pass
 		if (memcmp("****************", ptr1, strlen(ptr1) != 0))
 		{
-			strcpy(USER->CMSPass, ptr1);
+			memcpy(USER->CMSPass, ptr1, 15);
 		}
 		
 		ptr1 = GetNextParam(&ptr2);		// QTH
-		strcpy(USER->Address, ptr1);
+		memcpy(USER->Address, ptr1, 60);
 		ptr1 = GetNextParam(&ptr2);		// ZIP
-		strcpy(USER->ZIP, ptr1);
+		memcpy(USER->ZIP, ptr1, 8);
 		ptr1 = GetNextParam(&ptr2);		// HomeBBS
-		strcpy(USER->HomeBBS, ptr1);
+		memcpy(USER->HomeBBS, ptr1, 40);
 		_strupr(USER->HomeBBS);
 
 		SaveUserDatabase();
@@ -2775,6 +2758,19 @@ VOID SendUIPage(char * Reply, int * ReplyLen, char * Key)
 	*ReplyLen = Len;
 }
 
+void ConvertSpaceTonbsp(char * msg)
+{
+	// Replace any space with &nbsp;
+		
+	char * ptr;
+
+	while (ptr = strchr(msg, ' '))
+	{
+		memmove(ptr + 5, ptr, strlen(ptr) + 1);
+		memcpy(ptr, "&nbsp;", 6);
+	}
+}
+
 VOID SendStatusPage(char * Reply, int * ReplyLen, char * Key)
 {
 	int Len;
@@ -2797,6 +2793,8 @@ VOID SendStatusPage(char * Reply, int * ReplyLen, char * Key)
 		{
 			strcpy(msg,"Idle&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
 								 "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
+								 "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
+								 "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
 								 "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;\r\n");
 		}
 		else
@@ -2809,16 +2807,16 @@ VOID SendStatusPage(char * Reply, int * ReplyLen, char * Key)
 					strcpy(Name, conn->UserPointer->Name);
 					Name[9] = 0;
 
-					i=sprintf_s(msg, sizeof(msg), "%s%s%s%s%2d&nbsp;%5d\r\n",
+					i=sprintf_s(msg, sizeof(msg), "%-12s  %-9s  %3d  %6d%6d%6d\r\n",
 						Name,
-						&TenSpaces[strlen(Name) * 6],
 						conn->UserPointer->Call,
-						&TenSpaces[strlen(conn->UserPointer->Call) * 6],
 						conn->BPQStream,
-						conn->OutputQueueLength - conn->OutputGetPointer);
+						conn->OutputQueueLength - conn->OutputGetPointer, conn->bytesSent, conn->bytesRxed);
 				}
 			}
 		}
+
+		ConvertSpaceTonbsp(msg);
 		Len += sprintf(&Reply[Len], StatusLine, conn->BPQStream, msg);
 	}
 
@@ -2996,6 +2994,8 @@ int ProcessWebmailWebSock(char * MsgPtr, char * OutBuffer);
 
 static char PipeFileName[] = "\\\\.\\pipe\\BPQMailWebPipe";
 
+// Constants
+
 static DWORD WINAPI InstanceThread(LPVOID lpvParam)
 
 // This routine is a thread processing function to read from and reply to a client
@@ -3016,6 +3016,7 @@ static DWORD WINAPI InstanceThread(LPVOID lpvParam)
 	char URL[100001];
 	char * Context, * Method;
 	int n;
+	char token[16]= "";
 
 	char * ptr;
 
@@ -3051,17 +3052,39 @@ static DWORD WINAPI InstanceThread(LPVOID lpvParam)
 	}
 	else
 	{
-		strcpy(URL, MsgPtr);
+		// look for auth header	
+		
+		const char * auth_header = "Authorization: Bearer ";
+		char * token_begin = strstr(MsgPtr, auth_header);
+		int Flags = 0;
 
-		ptr = strstr(URL, " HTTP");
+		// Node Flags isn't currently used
 
-		if (ptr)
-			*ptr = 0;
+		if (token_begin)
+		{
+			// Using Auth Header
 
-		Method = strtok_s(URL, " ", &Context);
+			// Extract the token from the request (assuming it's present in the request headers)
 
-		ProcessMailHTTPMessage(&Session, Method, Context, MsgPtr, OutBuffer, &OutputLen, InputLen);
+			token_begin += strlen(auth_header); // Move to the beginning of the token
+			strncpy(token, token_begin, 13);
+			token[13] = '\0'; // Null-terminate the token
+		}
 	}
+
+	strcpy(URL, MsgPtr);
+
+
+
+	ptr = strstr(URL, " HTTP");
+
+	if (ptr)
+		*ptr = 0;
+
+	Method = strtok_s(URL, " ", &Context);
+
+	ProcessMailHTTPMessage(&Session, Method, Context, MsgPtr, OutBuffer, &OutputLen, InputLen, token);
+
 
 	WriteFile(hPipe, &Session, sizeof (struct HTTPConnectionInfo), &n, NULL);
 	WriteFile(hPipe, OutBuffer, OutputLen, &cbWritten, NULL); 

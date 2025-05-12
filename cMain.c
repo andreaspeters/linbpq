@@ -15,7 +15,8 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
-*/	
+*/
+
 
 //
 //	C replacement for Main.asm
@@ -34,20 +35,23 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 #include <fcntl.h>					 
 
 #include "kernelresource.h"
-#include "CHeaders.h"
+#include "cheaders.h"
 #include "tncinfo.h"
+#include "mqtt.h"
 
 VOID L2Routine(struct PORTCONTROL * PORT, PMESSAGE Buffer);
 VOID ProcessIframe(struct _LINKTABLE * LINK, PDATAMESSAGE Buffer);
 VOID FindLostBuffers();
 VOID ReadMH();
-void GetPortCTEXT(TRANSPORTENTRY * Session, char * Bufferptr, char * CmdTail, CMDX * CMD);
+void GetPortCTEXT(TRANSPORTENTRY * Session, char * Bufferptr, char * CmdTail, struct CMDX * CMD);
 int upnpInit();
 void AISTimer();
 void ADSBTimer();
 VOID SendSmartID(struct PORTCONTROL * PORT);
 int CanPortDigi(int Port);
 int	KissEncode(UCHAR * inbuff, UCHAR * outbuff, int len);
+void MQTTTimer();
+void SaveMH();
 
 #include "configstructs.h"
 
@@ -82,6 +86,7 @@ char	MYCALL[7] = ""; //		DB	7 DUP (0)	; NODE CALLSIGN (BIT SHIFTED)
 char	MYALIASTEXT[6] = ""; //	DB	'      '	; NODE ALIAS (KEEP TOGETHER)
 
 char MYALIASLOPPED[10];
+char MYCALLLOPPED[10];
 
 UCHAR	MYCALLWITHALIAS[13] = "";
 
@@ -91,6 +96,7 @@ APPLCALLS APPLCALLTABLE[NumberofAppls] = {0};
 
 UCHAR	MYNODECALL[10] = "";				// NODE CALLSIGN (ASCII)
 UCHAR	MYNETROMCALL[10] = "";				// NETROM CALLSIGN (ASCII)
+char NODECALLLOPPED[10];
 
 VOID * FREE_Q = NULL;
 
@@ -134,6 +140,14 @@ int NODE = 1;					// INCLUDE SWITCH SUPPORT
 
 int FULL_CTEXT = 1;				// CTEXT ON ALL CONNECTS IF NZ
 
+int L4Compress = 0;
+int L4CompMaxframe = 3;
+int L4CompPaclen = 236;
+
+int L2Compress = 0;
+int L2CompMaxframe = 3;
+int L2CompPaclen = 236;
+
 BOOL LogL4Connects = FALSE;
 BOOL LogAllConnects = FALSE;
 BOOL AUTOSAVEMH = TRUE;
@@ -142,6 +156,15 @@ extern UCHAR LogDirectory[260];
 extern BOOL EventsEnabled;
 extern BOOL SaveAPRSMsgs;
 BOOL M0LTEMap = FALSE;
+BOOL MQTT = FALSE;
+char MQTT_HOST[80] = "";
+int MQTT_PORT = 0;
+char MQTT_USER[80] = "";
+char MQTT_PASS[80] = "";
+
+int MQTT_Connecting = 0;
+int MQTT_Connected = 0;
+
 
 //TNCTABLE	DD	0
 //NUMBEROFSTREAMS	DD	0
@@ -318,7 +341,7 @@ BOOL LINKTXCHECK()
 	return 0;
 }
 
-void * Dummy()				// Dummy for missing EXT Driver
+void * Dummy(int fn, int port, PDATAMESSAGE buff)				// Dummy for missing EXT Driver
 {
 	return 0;
 }
@@ -326,27 +349,32 @@ void * Dummy()				// Dummy for missing EXT Driver
 VOID EXTINIT(PEXTPORTDATA PORTVEC)
 {
 	// LOAD DLL - NAME IS IN PORT_DLL_NAME
-	
-	VOID * Routine;
+
+	void *(* Startup) (PEXTPORTDATA PORTVEC);		// ADDR OF Startup ROUTINE
 
 	PORTVEC->PORT_EXT_ADDR = Dummy;
 
-	Routine = InitializeExtDriver(PORTVEC);
-	
-	if (Routine == 0)
+	Startup = InitializeExtDriver(PORTVEC);
+
+	if (Startup == 0)
 	{
 		WritetoConsoleLocal("Driver installation failed\n");
 		return;
 	}
-	PORTVEC->PORT_EXT_ADDR = Routine;
 
-//	ALSO CALL THE ROUTINE TO START IT UP, ESPECIALLY IF A L2 ROUTINE
 
-	Routine = (VOID *)PORTVEC->PORT_EXT_ADDR(PORTVEC);
+//	CALL THE ROUTINE TO START IT UP
 
 //	Startup returns address of processing routine
 
-	PORTVEC->PORT_EXT_ADDR = Routine;
+	PORTVEC->PORT_EXT_ADDR = (void *(__cdecl *)(int,int,PDATAMESSAGE))Startup(PORTVEC);;
+	
+	if (PORTVEC->PORT_EXT_ADDR == 0)
+	{
+		WritetoConsoleLocal("Driver Initialisation failed\n");
+		return;
+	}
+
 }
 
 VOID EXTTX(PEXTPORTDATA PORTVEC, MESSAGE * Buffer)
@@ -358,7 +386,7 @@ VOID EXTTX(PEXTPORTDATA PORTVEC, MESSAGE * Buffer)
 
 	if (PORT->KISSFLAGS == 255)	// Used for BAYCOM
 	{
-		PORTVEC->PORT_EXT_ADDR(2, PORT->PORTNUMBER, Buffer);
+		PORTVEC->PORT_EXT_ADDR(2, PORT->PORTNUMBER, (PDATAMESSAGE)Buffer);
 		
 		return;				// Baycom driver passes frames to trace once sent
 	}
@@ -374,7 +402,7 @@ VOID EXTTX(PEXTPORTDATA PORTVEC, MESSAGE * Buffer)
 			Buffer->Linkptr = 0;	// CLEAR FLAG FROM BUFFER
 	}
 	
-	PORTVEC->PORT_EXT_ADDR(2, PORT->PORTNUMBER, Buffer);
+	PORTVEC->PORT_EXT_ADDR(2, PORT->PORTNUMBER, (PDATAMESSAGE)Buffer);
 	
 	if (PORT->PROTOCOL == 10 && PORT->TNC && PORT->TNC->Hardware != H_KISSHF)
 	{
@@ -404,7 +432,7 @@ Loop:
 	if (Message == NULL)
 		return;
 
-	Len = (size_t)PORTVEC->PORT_EXT_ADDR(1, PORT->PORTNUMBER, Message);
+	Len = (size_t)PORTVEC->PORT_EXT_ADDR(1, PORT->PORTNUMBER, (PDATAMESSAGE)Message);
 	
 	if (Len == 0)
 	{
@@ -438,7 +466,6 @@ Loop:
 				if (TNC->DisconnectScript)
 				{
 					int n = 0;
-					char command[256];
 					struct DATAMESSAGE * Buffer;
 
 					TRANSPORTENTRY Session = {0};		//	= TNC->PortRecord->ATTACHEDSESSIONS[Sessno];
@@ -489,7 +516,9 @@ VOID EXTSLOWTIMER(PEXTPORTDATA PORTVEC)
 
 size_t EXTTXCHECK(PEXTPORTDATA PORTVEC, int Chan)
 {
-	return (size_t)PORTVEC->PORT_EXT_ADDR(3, PORTVEC->PORTCONTROL.PORTNUMBER, Chan);
+	uintptr_t Temp = Chan;
+
+	return (size_t)PORTVEC->PORT_EXT_ADDR(3, PORTVEC->PORTCONTROL.PORTNUMBER, (void *)Temp);
 }
 
 VOID PostDataAvailable(TRANSPORTENTRY * Session)
@@ -565,8 +594,8 @@ extern VOID HDLCTXCHECK();
 #endif
 
 extern VOID KISSINIT(), KISSTX(), KISSRX(), KISSTIMER(), KISSCLOSE();
-extern VOID EXTINIT(), EXTTX(), LINKRX(), EXTRX();
-extern VOID LINKCLOSE(), EXTCLOSE() ,LINKTIMER(), EXTTIMER();
+extern VOID EXTINIT(PEXTPORTDATA PORTVEC), EXTTX(PEXTPORTDATA PORTVEC, MESSAGE * Buffer), LINKRX(), EXTRX(PEXTPORTDATA PORTVEC);
+extern VOID LINKCLOSE(), EXTCLOSE() ,LINKTIMER(), EXTTIMER(PEXTPORTDATA PORTVEC);
 
 //	VECTORS TO HARDWARE DEPENDENT ROUTINES
 
@@ -596,7 +625,7 @@ extern int L4TimerProc();
 extern int L3FastTimer();
 extern int StatsTimer();
 extern int COMMANDHANDLER();
-extern int SDETX();
+VOID SDETX(struct _LINKTABLE * LINK);
 extern int L4BG();
 extern int L3BG();
 extern int TNCTimerProc();
@@ -615,7 +644,7 @@ BOOL Start()
 	APPLCALLS * APPL;
 	struct ROUTE * ROUTE;
 	struct DEST_LIST * DEST;
-	CMDX * CMD;
+	struct CMDX * CMD;
 	int PortSlot = 1;
 	uintptr_t int3;
 
@@ -729,6 +758,10 @@ BOOL Start()
 		memcpy(MYNETROMCALL, cfg->C_NETROMCALL, 10);
 
 	strlop(MYNETROMCALL, ' ');
+	strlop(MYNODECALL, ' ');
+
+	memcpy(NODECALLLOPPED, MYNODECALL, 10);
+	strlop(NODECALLLOPPED, ' ');
 
 	APPLCALLTABLE[0].APPLQUAL = BBSQUAL;
 
@@ -793,8 +826,32 @@ BOOL Start()
 	EventsEnabled = cfg->C_EVENTS;
 	SaveAPRSMsgs = cfg->C_SaveAPRSMsgs;
 	M0LTEMap = cfg->C_M0LTEMap;
+	MQTT = cfg->C_MQTT;
+	strcpy(MQTT_HOST, cfg->C_MQTT_HOST);
+	MQTT_PORT = cfg->C_MQTT_PORT;
+	strcpy(MQTT_USER, cfg->C_MQTT_USER);
+	strcpy(MQTT_PASS, cfg->C_MQTT_PASS);
+	L4Compress = cfg->C_L4Compress;
+	L4CompMaxframe = cfg->C_L4CompMaxframe;
+	L4CompPaclen = cfg->C_L4CompPaclen;
 
+	if (L4CompMaxframe < 1 || L4CompMaxframe > 16)
+		L4CompMaxframe = 3;
 
+	if (L4CompPaclen < 64 || L4CompPaclen > 236)
+		L4CompPaclen = 236;
+
+	L2Compress = cfg->C_L2Compress;
+	L2CompMaxframe = cfg->C_L2CompMaxframe;
+	L2CompPaclen = cfg->C_L2CompPaclen;
+
+	if (L2CompMaxframe < 1 || L2CompMaxframe > 16)
+		L2CompMaxframe = 3;
+
+	if (L2CompPaclen < 64 || L2CompPaclen > 236)
+		L2CompPaclen = 236;
+
+ 
 	// Get pointers to PASSWORD and APPL1 commands
 
 //	int APPL1 = 0;
@@ -891,7 +948,7 @@ BOOL Start()
 		PORT->PROTOCOL = (char)PortRec->PROTOCOL;
 		PORT->IOBASE = PortRec->IOADDR;
 
-		if (PortRec->SerialPortName[0])
+		if (PortRec->SerialPortName && PortRec->SerialPortName[0])
 			PORT->SerialPortName = _strdup(PortRec->SerialPortName);
 		else
 		{
@@ -1310,7 +1367,7 @@ BOOL Start()
 		ROUTE->NBOUR_PACLEN = Rcfg->ppacl;
 		ROUTE->OtherendsRouteQual = ROUTE->OtherendLocked = Rcfg->farQual;
 
-		ROUTE->NEIGHBOUR_FLAG = 1;			// Locked
+		ROUTE->NEIGHBOUR_FLAG = LOCKEDBYCONFIG;			// Locked
 		
 		Rcfg++;
 		ROUTE++;
@@ -1487,7 +1544,7 @@ BOOL Start()
 
 	upnpInit();
 
-	CurrentSecs = lastSlowSecs = time(NULL);
+	lastSaveSecs = CurrentSecs = lastSlowSecs = time(NULL);
 
 	return 0;
 }
@@ -1815,12 +1872,11 @@ VOID ReadNodes()
 			if (ptr == NULL) continue;
 
 			// I don't thinlk we should load locked flag from save file - only from config
-
-			// But need to parse it until I stop saving it
+			// Now (2025) have two locked flags, from config or by sysop. Latter is saved and restored
 
 			if (ptr[0] == '!')
 			{
-//				ROUTE->NEIGHBOUR_FLAG = 1;			// LOCKED ROUTE
+				ROUTE->NEIGHBOUR_FLAG = LOCKEDBYSYSOP;			// LOCKED ROUTE
 				ptr = strtok_s(NULL, seps, &Context);
 				if (ptr == NULL) continue;
 			}
@@ -1837,7 +1893,7 @@ VOID ReadNodes()
 
 				memcpy(ROUTE->NEIGHBOUR_DIGI1, axcall, 7);
 
-				ROUTE->NEIGHBOUR_FLAG = 1;			// LOCKED ROUTE - Digi'ed routes must be locked
+				ROUTE->NEIGHBOUR_FLAG = LOCKEDBYSYSOP;			// LOCKED ROUTE - Digi'ed routes must be locked
 
 				ptr = strtok_s(NULL, seps, &Context);
 				if (ptr == NULL) continue;
@@ -1893,6 +1949,14 @@ VOID ReadNodes()
 			if (ROUTE->NEIGHBOUR_FLAG == 0 || ROUTE->OtherendLocked == 0);		// Not LOCKED ROUTE
 				ROUTE->OtherendsRouteQual = atoi(ptr);
 
+			ptr = strtok_s(NULL, seps, &Context);	// INP3
+			if (ptr == NULL) continue;
+
+			if (ptr[0] == '!')
+			{
+				ROUTE->NEIGHBOUR_FLAG = LOCKEDBYSYSOP;			// LOCKED ROUTE
+				ptr = strtok_s(NULL, seps, &Context);
+			}
 			continue;
 		}
 
@@ -2067,6 +2131,9 @@ VOID TIMERINTERRUPT()
 		sendFreqReport();
 		sendModeReport();
 
+		if (MQTT)
+			MQTTTimer();
+
 /*
 		if (QCOUNT < 200)
 		{
@@ -2082,7 +2149,19 @@ VOID TIMERINTERRUPT()
 		}
 */
 	}
-	
+
+	// Check Autosave Nodes and MH timer
+
+	if (CurrentSecs - lastSaveSecs >= 3600)		// 1 per hour
+	{
+		lastSaveSecs = CurrentSecs;
+
+		if (AUTOSAVE == 1)
+			SaveNodes();
+		if (AUTOSAVEMH == 1)
+			SaveMH();
+	}
+
 	if (L4TIMERFLAG >= 10)				// 1 PER SEC
 	{
 		L4TIMERFLAG -= 10;
@@ -2218,6 +2297,9 @@ L2Packet:
 			time(&Message->Timestamp);
 
 			Message->PORT = CURRENTPORT;
+
+			if (MQTT && PORT->PROTOCOL == 0)
+				MQTTKISSRX(Buffer);
 			
 			// Bridge if requested
 
@@ -2303,7 +2385,7 @@ L2Packet:
 				PORT->L2FRAMESSENT++;
 				OutOctets[PORT->PORTNUMBER] += Buffer->LENGTH - MSGHDDRLEN;
 
-				PORT->PORTTXROUTINE(PORT, Buffer);
+				PORT->PORTTXROUTINE((struct _EXTPORTDATA *)PORT, Buffer);
 				Sent++;
 
 				continue;
@@ -2349,7 +2431,7 @@ PACTORLOOP:
 			PORT->L2FRAMESSENT++;
 			OutOctets[PORT->PORTNUMBER] += Message->LENGTH;
 
-			PORT->PORTTXROUTINE(PORT, Buffer);
+			PORT->PORTTXROUTINE((struct _EXTPORTDATA *)PORT, Buffer);
 			Sent++;
 
 			if (Sent < 5)
@@ -2362,7 +2444,7 @@ ENDOFLIST:
 			break;
 		}
 
-		PORT->PORTRXROUTINE(PORT);			// SEE IF MESSAGE RECEIVED
+		PORT->PORTRXROUTINE((struct _EXTPORTDATA *)PORT);			// SEE IF MESSAGE RECEIVED
 		PORT = PORT->PORTPOINTER;
 	}
 
@@ -2422,7 +2504,7 @@ VOID DoListenMonitor(TRANSPORTENTRY * L4, MESSAGE * Msg)
 	PDATAMESSAGE Buffer;
 	char MonBuffer[1024];
 	int len;
-
+	struct tm * TM;
 	UCHAR * monchars = (UCHAR *)Msg;
 
 	if (CountFramesQueuedOnSession(L4) > 10)
@@ -2432,13 +2514,18 @@ VOID DoListenMonitor(TRANSPORTENTRY * L4, MESSAGE * Msg)
 		return;
 
 	IntSetTraceOptionsEx(L4->LISTEN, 1, 0, 0);
-	
-	len = IntDecodeFrame(Msg, MonBuffer, Msg->Timestamp, L4->LISTEN, FALSE, TRUE);
+
+	TM = gmtime(&Msg->Timestamp);
+	sprintf(MonBuffer, "%02d:%02d:%02d ", TM->tm_hour, TM->tm_min, TM->tm_sec);
+
+	len = IntDecodeFrame(Msg, &MonBuffer[9], Msg->Timestamp, L4->LISTEN, FALSE, TRUE);
 	
 	IntSetTraceOptionsEx(SaveMMASK, SaveMTX, SaveMCOM, SaveMUI);
 
 	if (len == 0)
 		return;
+
+	len += 9;
 
 	if (len > 256)
 		len = 256;

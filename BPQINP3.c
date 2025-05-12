@@ -28,7 +28,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #pragma data_seg("_BPQDATA")
 
-#include "CHeaders.h"
+#include "cheaders.h"
 
 #include "time.h"
 #include "stdio.h"
@@ -64,7 +64,7 @@ typedef struct _RTTMSG
 
 } RTTMSG;
 
-extern int COUNTNODES();
+int COUNTNODES(struct ROUTE * ROUTE);
 
 VOID __cdecl Debugprintf(const char * format, ...);
 
@@ -932,7 +932,7 @@ int SendRIPTimer()
 
 				// Delay more if Locked - they could be retrying for a long time
 
-				if ((Route->NEIGHBOUR_FLAG & 1))	 // LOCKED ROUTE
+				if ((Route->NEIGHBOUR_FLAG))	 // LOCKED ROUTE
 					INP3Delay = 1200;
 				else
 					INP3Delay = 600;

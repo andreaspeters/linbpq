@@ -28,7 +28,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 #include <time.h>
 
 
-#include "CHeaders.h"
+#include "cheaders.h"
 
 #ifdef WIN32
 #include <Psapi.h>
@@ -394,6 +394,18 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 			}
 		}
 
+		// Check ATTACH time limit
+
+		if (STREAM->Attached)
+		{
+			if (STREAM->AttachTime && TNC->AttachTimeLimit && time(NULL) > (TNC->AttachTimeLimit + STREAM->AttachTime))
+			{
+				STREAM->ReportDISC = 1;
+				STREAM->AttachTime = 0;
+			}
+		}
+
+
 		while (TNC->PortRecord->UI_Q)
 		{
 			buffptr = Q_REM(&TNC->PortRecord->UI_Q);
@@ -506,6 +518,8 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 			int calllen;
 			char Msg[80];
 
+			memset(STREAM, 0, sizeof(struct STREAMINFO));
+
 			TNC->Streams[0].Attached = TRUE;
 
 			calllen = ConvFromAX25(TNC->PortRecord->ATTACHEDSESSIONS[0]->L4USER, TNC->Streams[0].MyCall);
@@ -516,6 +530,7 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 			VARASendCommand(TNC, "LISTEN OFF\r", TRUE);
 
 			TNC->SessionTimeLimit = TNC->DefaultSessionTimeLimit;		// Reset Limit
+			STREAM->AttachTime = time(NULL);
 
 			// Stop other ports in same group
 
@@ -568,7 +583,7 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 
 				buffptr->Data[txlen] = 0;		//  Null terminate
 
-				STREAM->BytesTXed += txlen;
+				STREAM->bytesTXed += txlen;
 				WritetoTrace(TNC, buffptr->Data, txlen);
 
 				// Always add to stored data and set timer. If it expires send message
@@ -599,7 +614,7 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 				memcpy(txbuff, buffptr->Data, txlen);
 	
 			bytes = VARASendData(TNC, &txbuff[0], txlen);
-			STREAM->BytesTXed += bytes;
+			STREAM->bytesTXed += bytes;
 			ReleaseBuffer(buffptr);
 		}
 
@@ -647,7 +662,7 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 			txlen = (int)buffptr->Len;
 			memcpy(txbuff, buffptr->Data, txlen);
 			bytes=send(TNC->TCPDataSock, buff->L2DATA, txlen, 0);
-			STREAM->BytesTXed += bytes;
+			STREAM->bytesTXed += bytes;
 			WritetoTrace(TNC, txbuff, txlen);
 			ReleaseBuffer(buffptr);
 		}
@@ -674,7 +689,7 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 				memcpy(txbuff, buff->L2DATA, txlen);
 
 				bytes=send(TNC->TCPDataSock, txbuff, txlen, 0);
-				STREAM->BytesTXed += bytes;
+				STREAM->bytesTXed += bytes;
 				WritetoTrace(TNC, buff->L2DATA, txlen);
 				return 0;
 			}
@@ -690,7 +705,7 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 
 			buff->L2DATA[txlen] = 0;		//  Null terminate
 
-			STREAM->BytesTXed += txlen;
+			STREAM->bytesTXed += txlen;
 			WritetoTrace(TNC, buff->L2DATA, txlen);
 		
 			// Always add to stored data and set timer. If it expires send message
@@ -815,6 +830,8 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 				// Need to set connecting here as if we delay for busy we may incorrectly process OK response
 
 				TNC->Streams[0].Connecting = TRUE;
+	
+				hookL4SessionAttempt(STREAM, &buff->L2DATA[2], TNC->Streams[0].MyCall);
 
 				// See if Busy
 
@@ -1146,6 +1163,7 @@ void * VARAExtInit(EXTPORTDATA * PortEntry)
 	}
 	
 	TNC->Port = port;
+	TNC->PortRecord = PortEntry;
 
 	TNC->ARDOPBuffer = malloc(8192);
 	TNC->ARDOPDataBuffer = malloc(8192);
@@ -1153,15 +1171,13 @@ void * VARAExtInit(EXTPORTDATA * PortEntry)
 	if (TNC->ProgramPath)
 		TNC->WeStartedTNC = 1;
 
-	TNC->Hardware = H_VARA;
+	TNC->PortRecord->PORTCONTROL.HWType = TNC->Hardware = H_VARA;
 
 	if (TNC->BusyWait == 0)
 		TNC->BusyWait = 10;
 
 	if (TNC->BusyHold == 0)
 		TNC->BusyHold = 1;
-
-	TNC->PortRecord = PortEntry;
 
 	if (PortEntry->PORTCONTROL.PORTCALL[0] == 0)
 		memcpy(TNC->NodeCall, MYNODECALL, 10);
@@ -1429,9 +1445,6 @@ VOID VARAThread(void * portptr)
 		return;
 	}
 
-
-//	printf("Starting VARA Thread\n");
-
 // if on Windows and Localhost see if TNC is running
 
 #ifdef WIN32
@@ -1547,14 +1560,11 @@ TNCRunning:
 	sinx.sin_addr.s_addr = INADDR_ANY;
 	sinx.sin_port = 0;
 
-//	printf("Trying to connect to VARA TNC\n");
-
 	if (connect(TNC->TCPSock,(LPSOCKADDR) &TNC->destaddr,sizeof(TNC->destaddr)) == 0)
 	{
 		//	Connected successful
 
 		goto VConnected;
-
 	}
 
 	if (TNC->Alerted == FALSE)
@@ -2000,7 +2010,7 @@ VOID VARAProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 		}
 
 		sprintf(TNC->WEB_TRAFFIC, "Sent %d RXed %d Queued %s",
-			STREAM->BytesTXed, STREAM->BytesRXed, &Buffer[7]);
+			STREAM->bytesTXed, STREAM->bytesRXed, &Buffer[7]);
 		MySetWindowText(TNC->xIDC_TRAFFIC, TNC->WEB_TRAFFIC);
 
 		return;
@@ -2020,8 +2030,7 @@ VOID VARAProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 		Debugprintf(Buffer);
 		WritetoTrace(TNC, Buffer, MsgLen - 1);
 
-		STREAM->ConnectTime = time(NULL); 
-		STREAM->BytesRXed = STREAM->BytesTXed = STREAM->PacketsSent = 0;
+		STREAM->bytesRXed = STREAM->bytesTXed = STREAM->PacketsSent = 0;
 
 		if (TNC->VARACMsg)
 			free(TNC->VARACMsg);
@@ -2088,6 +2097,10 @@ VOID VARAProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 
 			// Stop other ports in same group
 
+			memset(STREAM, 0, sizeof(struct STREAMINFO));
+
+			STREAM->ConnectTime = time(NULL); 
+	
 			SuspendOtherPorts(TNC);
 						
 			TNC->SessionTimeLimit = TNC->DefaultSessionTimeLimit;		// Reset Limit
@@ -2095,7 +2108,7 @@ VOID VARAProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 			// Only allow VarAC mode for incomming sessions
 
 			ProcessIncommingConnectEx(TNC, Call, 0, (TNC->NetRomMode == 0), TRUE);
-				
+
 			SESS = TNC->PortRecord->ATTACHEDSESSIONS[0];
 
 			if (Speed)
@@ -2183,7 +2196,7 @@ VOID VARAProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 					STREAM->PacketsSent++;
 
 					bytes = send(TNC->TCPDataSock, TNC->NetRomTxBuffer, TNC->NetRomTxLen, 0);
-					STREAM->BytesTXed += TNC->NetRomTxLen;
+					STREAM->bytesTXed += TNC->NetRomTxLen;
 
 					free(TNC->NetRomTxBuffer);
 					TNC->NetRomTxBuffer = NULL;
@@ -2210,8 +2223,9 @@ VOID VARAProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 			if (App < 32)
 			{
 				char AppName[13];
+				char AppBuffer[64];
 
-				memcpy(AppName, &ApplPtr[App * sizeof(CMDX)], 12);
+				memcpy(AppName, &ApplPtr[App * sizeof(struct CMDX)], 12);
 				AppName[12] = 0;
 
 				// if SendTandRtoRelay set and Appl is RMS change to RELAY
@@ -2224,7 +2238,7 @@ VOID VARAProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 
 				if (CheckAppl(TNC, AppName))
 				{
-					MsgLen = sprintf(Buffer, "%s\r", AppName);
+					MsgLen = sprintf(AppBuffer, "%s\r", AppName);
 
 					buffptr = GetBuff();
 
@@ -2234,7 +2248,9 @@ VOID VARAProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 					}
 
 					buffptr->Len = MsgLen;
-					memcpy(buffptr->Data, Buffer, MsgLen);
+					memcpy(buffptr->Data, AppBuffer, MsgLen);
+
+					Debugprintf("Calling Application %s", AppBuffer);
 
 					C_Q_ADD(&TNC->WINMORtoBPQ_Q, buffptr);
 		
@@ -2264,6 +2280,8 @@ VOID VARAProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 					STREAM->NeedDisc = 100;	// 10 secs
 				}
 			}
+
+			strcpy(STREAM->MyCall, TNC->TargetCall);
 			return;
 		}
 		else
@@ -2273,6 +2291,7 @@ VOID VARAProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 			char Reply[80];
 			int ReplyLen;
 			
+			STREAM->ConnectTime = time(NULL); 
 
 			if (TNC->NetRomMode)
 			{
@@ -2285,7 +2304,7 @@ VOID VARAProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 					STREAM->PacketsSent++;
 
 					bytes = send(TNC->TCPDataSock, TNC->NetRomTxBuffer, TNC->NetRomTxLen, 0);
-					STREAM->BytesTXed += TNC->NetRomTxLen;
+					STREAM->bytesTXed += TNC->NetRomTxLen;
 					free(TNC->NetRomTxBuffer);
 					TNC->NetRomTxBuffer = NULL;
 					TNC->NetRomTxLen = 0;
@@ -2374,22 +2393,7 @@ VOID VARAProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 		{
 			// Create a traffic record
 		
-			char logmsg[120];	
-			time_t Duration;
-
-			Duration = time(NULL) - STREAM->ConnectTime;
-
-			if (Duration == 0)
-				Duration = 1;
-				
-			sprintf(logmsg,"Port %2d %9s Bytes Sent %d  BPS %d Bytes Received %d BPS %d Time %d Seconds",
-				TNC->Port, STREAM->RemoteCall,
-				STREAM->BytesTXed, (int)(STREAM->BytesTXed/Duration),
-				STREAM->BytesRXed, (int)(STREAM->BytesRXed/Duration), (int)Duration);
-
-			Debugprintf(logmsg);
-
-			STREAM->ConnectTime= 0;  //Prevent retrigger
+			hookL4SessionDeleted(TNC, STREAM);
 		}
 
 
@@ -2421,7 +2425,7 @@ VOID VARAProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 //		return;
 	}
 
-	if (_memicmp(Buffer, "REGISTERED", 9) == 0)
+	if (_memicmp(Buffer, "LINK REGISTERED", 9) == 0)
 	{
 		strcat(Buffer, "\r");
 		WritetoTrace(TNC, Buffer, (int)strlen(Buffer));
@@ -2429,6 +2433,13 @@ VOID VARAProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 	}
 
 	if (_memicmp(Buffer, "ENCRYPTION ", 11) == 0)
+	{
+		strcat(Buffer, "\r");
+		WritetoTrace(TNC, Buffer, (int)strlen(Buffer));
+		return;
+	}
+
+	if (_memicmp(Buffer, "UNENCRYPTED LINK ", 11) == 0)
 	{
 		strcat(Buffer, "\r");
 		WritetoTrace(TNC, Buffer, (int)strlen(Buffer));
@@ -2660,7 +2671,7 @@ VOID VARAProcessReceivedControl(struct TNCINFO * TNC)
 {
 	int InputLen, MsgLen;
 	char * ptr, * ptr2;
-	char Buffer[4096];
+	char Buffer[8192];
 
 	// shouldn't get several messages per packet, as each should need an ack
 	// May get message split over packets
@@ -2668,7 +2679,7 @@ VOID VARAProcessReceivedControl(struct TNCINFO * TNC)
 	if (TNC->InputLen > 8000)	// Shouldnt have packets longer than this
 		TNC->InputLen=0;
 				
-	InputLen=recv(TNC->TCPSock, &TNC->ARDOPBuffer[TNC->InputLen], 8192 - TNC->InputLen, 0);
+	InputLen=recv(TNC->TCPSock, &TNC->ARDOPBuffer[TNC->InputLen], 8191 - TNC->InputLen, 0);
 
 	if (InputLen == 0 || InputLen == SOCKET_ERROR)
 	{		
@@ -2691,12 +2702,18 @@ VOID VARAProcessReceivedControl(struct TNCINFO * TNC)
 
 	TNC->InputLen += InputLen;
 
+	TNC->ARDOPBuffer[TNC->InputLen] = 0;
+	Debugprintf("VARA Processing buffer - %s", TNC->ARDOPBuffer);
+
 loop:
 
 	ptr = memchr(TNC->ARDOPBuffer, '\r', TNC->InputLen);
 
 	if (ptr == 0)	//  CR in buffer
+	{
+		Debugprintf("VARA Part Packet Received - Waiting for rest");
 		return;		// Wait for it
+	}
 
 	ptr2 = &TNC->ARDOPBuffer[TNC->InputLen];
 
@@ -2719,9 +2736,10 @@ loop:
 		if (TNC->InputLen < MsgLen)
 		{
 			TNC->InputLen = 0;
+			Debugprintf("VARA Corrupt multi command input");
 			return;
 		}
-		memmove(TNC->ARDOPBuffer, ptr + 1,  TNC->InputLen-MsgLen);
+		memmove(TNC->ARDOPBuffer, ptr + 1,  TNC->InputLen - MsgLen);
 
 		TNC->InputLen -= MsgLen;
 		goto loop;
@@ -2742,13 +2760,13 @@ VOID VARAProcessDataPacket(struct TNCINFO * TNC, UCHAR * Data, int Length)
 		
 	TNC->TimeSinceLast = 0;
 
-	STREAM->BytesRXed += Length;
+	STREAM->bytesRXed += Length;
 
 	Data[Length] = 0;	
 //	Debugprintf("VARA: RXD %d bytes", Length);
 
 	sprintf(TNC->WEB_TRAFFIC, "Sent %d RXed %d Queued %d",
-			STREAM->BytesTXed, STREAM->BytesRXed,STREAM->BytesOutstanding);
+			STREAM->bytesTXed, STREAM->bytesRXed,STREAM->BytesOutstanding);
 	MySetWindowText(TNC->xIDC_TRAFFIC, TNC->WEB_TRAFFIC);
 
 	// if VARAAC Mode, remove byte count from front and add cr
@@ -2891,7 +2909,7 @@ int VARASendData(struct TNCINFO * TNC, UCHAR * Buff, int Len)
 	struct STREAMINFO * STREAM = &TNC->Streams[0];
 
 	int bytes=send(TNC->TCPDataSock,(const char FAR *)Buff, Len, 0);
-	STREAM->BytesTXed += bytes;
+	STREAM->bytesTXed += bytes;
 	WritetoTrace(TNC, Buff, Len);
 	return bytes;
 }
@@ -2990,7 +3008,7 @@ void SendVARANetrom(struct TNCINFO * TNC, unsigned char * Data, int Len)
 		STREAM->PacketsSent++;
 
 		bytes = send(TNC->TCPDataSock, TNC->NetRomTxBuffer, TNC->NetRomTxLen, 0);
-		STREAM->BytesTXed += TNC->NetRomTxLen;
+		STREAM->bytesTXed += TNC->NetRomTxLen;
 
 		free(TNC->NetRomTxBuffer);
 		TNC->NetRomTxBuffer = NULL;

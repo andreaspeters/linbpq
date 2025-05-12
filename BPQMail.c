@@ -1140,6 +1140,18 @@
 //	Rewrite PG server code on Lunux (41)
 //	Fix SendPToMultiple not stopping at Implied AT match (45)
 //	Log Our HA when checking for flood bulls (45)
+//	Semaphore calls to SaveConfig
+//	Include SERVIC as valid from call (for Winlink Service messages) (49)
+//	Attempt to detect line draw characters in Webmail (50)
+//	Fix sending ampr.org mail when RMS is not enabled (51)
+//	Send forwarding info to packetnodes.spots.radio database (51)
+//	Fix bug in WP Message processing (56)
+//	Fix treating addresses ending in WW as Internet (57)
+//	Run sending to packetnodes.spots.radio in a separate thread (61)
+//	Fix loading ISP Account Name from config file (67)
+//	Fixes to using {FormFolder} in Webmail Templates (68)
+//	Save FBB transfer restart data over program restarts (69) 
+//	Add Send and Receive byte counts to status displays (69)
 
 #include "bpqmail.h"
 #include "winstdint.h"
@@ -1158,6 +1170,8 @@ FARPROCZ pGetLOC;
 FARPROCX pRefreshWebMailIndex;
 FARPROCX pRunEventProgram;
 FARPROCX pGetPortFrequency;
+FARPROCX pSendWebRequest;
+FARPROCX pGetLatLon;
 
 BOOL WINE = FALSE;
 
@@ -1382,6 +1396,7 @@ char * CheckToAddress(CIRCUIT * conn, char * Addr);
 BOOL CheckifPacket(char * Via);
 int GetHTMLForms();
 VOID GetPGConfig();
+void SendBBSDataToPktMap();
 
 struct _EXCEPTION_POINTERS exinfox;
 	
@@ -1392,7 +1407,7 @@ DWORD Stack[16];
 
 BOOL Restarting = FALSE;
 
-Dump_Process_State(struct _EXCEPTION_POINTERS * exinfo, char * Msg)
+void Dump_Process_State(struct _EXCEPTION_POINTERS * exinfo, char * Msg)
 {
 	unsigned int SPPtr;
 	unsigned int SPVal;
@@ -1528,7 +1543,11 @@ VOID WriteMiniDump()
 }
 
 
-void GetSemaphore(struct SEM * Semaphore, int ID)
+
+#define GetSemaphore(Semaphore,ID) _GetSemaphore(Semaphore, ID, __FILE__, __LINE__)
+
+
+void _GetSemaphore(struct SEM * Semaphore, int ID, char * File, int Line)
 {
 	//
 	//	Wait for it to be free
@@ -1709,6 +1728,7 @@ int APIENTRY WinMain(HINSTANCE hInstance,
 //	SaveUserDatabase();
 	SaveMessageDatabase();
 	SaveBIDDatabase();
+	SaveRestartData();
 
 	configSaved = 1;
 	SaveConfig(ConfigName);
@@ -1933,6 +1953,8 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 		pRefreshWebMailIndex = GetProcAddress(ExtDriver,"_RefreshWebMailIndex@0");
 		pRunEventProgram = GetProcAddress(ExtDriver,"_RunEventProgram@8");
 		pGetPortFrequency = GetProcAddress(ExtDriver,"_GetPortFrequency@8");
+		pSendWebRequest = GetProcAddress(ExtDriver,"_SendWebRequest@16");
+		pGetLatLon = GetProcAddress(ExtDriver,"_GetLatLon@8");
 		
 
 		if (pGetLOC)
@@ -2180,6 +2202,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 					Debugprintf("|Enter HouseKeeping");
 					DoHouseKeeping(FALSE);
 				}
+				
+				if (APIClock < NOW)
+				{
+					SendBBSDataToPktMap();
+					APIClock = NOW + 7200;			// Every 2 hours
+				}
+
 				tm = gmtime(&NOW);	
 
 				if (tm->tm_wday == 0)		// Sunday
@@ -2813,6 +2842,12 @@ gotAddr:
 
 			EndDialog(hDlg, LOWORD(wParam));
 
+#ifndef NOMQTT
+			if (MQTT)
+				MQTTMessageEvent(Msg);
+#endif
+
+
 			return TRUE;
 		}
 
@@ -2990,9 +3025,9 @@ int RefreshMainWindow()
 					strcpy(msg,"Logging in");
 				else
 				{
-					i=sprintf_s(msg, sizeof(msg), "%-10s %-10s %2d %-10s%5d",
+					i=sprintf_s(msg, sizeof(msg), "%-10s %-10s %2d %-10s%5d    %5d  %5d",
 						conn->UserPointer->Name, conn->UserPointer->Call, conn->BPQStream,
-						"BBS", conn->OutputQueueLength - conn->OutputGetPointer);
+						"BBS", conn->OutputQueueLength - conn->OutputGetPointer, conn->bytesSent, conn->bytesRxed);
 				}
 			}
 		}
@@ -3053,7 +3088,7 @@ static PSOCKADDR_IN psin;
 
 SOCKET sock;
 
-
+void GetRestartData();
 
 BOOL Initialise()
 {
@@ -3068,6 +3103,8 @@ BOOL Initialise()
 	struct stat STAT;
 
 	GetTimeZoneInformation(&TimeZoneInformation);
+
+	Debugprintf("%d", sizeof(struct MsgInfo));
 
 	_tzset();
 	_MYTIMEZONE = timezone;
@@ -3239,6 +3276,8 @@ BOOL Initialise()
 	GetBadWordFile();
 	GetHTMLForms();
 
+	GetRestartData();
+
 	UsingingRegConfig = FALSE;
 
 	// Make sure SYSOPCALL is set
@@ -3379,6 +3418,8 @@ BOOL Initialise()
 
 	CreatePipeThread();
 	GetPGConfig();
+
+	APIClock = 0;
 
 	return TRUE;
 }

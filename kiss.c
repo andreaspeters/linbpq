@@ -77,7 +77,8 @@ int i2c_smbus_read_byte()
 #endif
 
 
-#include "CHeaders.h"
+#include "cheaders.h"
+#include "mqtt.h"
 #include "kiss.h"
 
 int i2cPoll(struct PORTCONTROL * PORT, NPASYINFO npKISSINFO);
@@ -208,7 +209,7 @@ VOID EnableFLDIGIReports(struct PORTCONTROL * PORT)
 
 VOID ASYDISP(struct PORTCONTROL * PortVector)
 {
-	char Msg[80];
+	char Msg[512];
 
 	if (PortVector->PORTIPADDR.s_addr  || PortVector->KISSTCP)
 
@@ -234,7 +235,7 @@ VOID ASYDISP(struct PORTCONTROL * PortVector)
 
 int	ASYINIT(int comport, int speed, struct PORTCONTROL * PortVector, char Channel )
 {
-	char Msg[80];
+	char Msg[256];
 	NPASYINFO npKISSINFO;
 	int BPQPort = PortVector->PORTNUMBER;
 
@@ -994,6 +995,10 @@ DONTCHECKDCD:
 */
 
 	SENDFRAME(KISS, Buffer);
+
+	if (MQTT)
+		MQTTKISSTX(Buffer);
+
 }
 
 VOID SENDFRAME(struct KISSINFO * KISS, PMESSAGE Buffer)
@@ -1179,6 +1184,10 @@ VOID SENDFRAME(struct KISSINFO * KISS, PMESSAGE Buffer)
 	(*ptr2++) = FEND;
 
 	ASYSEND(PORT, ENCBUFF, (int)(ptr2 - (char *)ENCBUFF));
+
+	if (MQTT) 
+		MQTTKISSTX_RAW((char *)ENCBUFF, (int)(ptr2 - (char *)ENCBUFF), PORT);
+
 
 	// Pass buffer to trace routines
 
@@ -1476,7 +1485,7 @@ SeeifMore:
 				}	
 			}
 			else
-				Debugprintf("Polled KISS - response from wrong address - Polled %d Reponse %d",  
+				Debugprintf("Polled KISS - response from wrong address - Polled %d Response %d",  
 					KISS->POLLPOINTER->OURCTRL, (Port->RXMSG[0] & 0xf0));
 
 			goto SeeifMore;				// SEE IF ANYTHING ELSE
@@ -1739,6 +1748,9 @@ SeeifMore:
 		}
 		else
 */
+		if (MQTT)
+			MQTTKISSRX_RAW((char *)Buffer, len, PORT);
+		
 		C_Q_ADD(&KISS->PORT.PORTRX_Q, (UINT *)Buffer);
 	}
 

@@ -119,7 +119,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #define _CRT_SECURE_NO_DEPRECATE
 
-#include "CHeaders.h"
+#include "cheaders.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -174,15 +174,20 @@ extern BOOL Loopflag;
 extern char NodeMapServer[80];
 extern char ChatMapServer[80];
 
+double LatFromLOC;
+double LonFromLOC;
+
+
 
 VOID * zalloc(int len);
 
 int WritetoConsoleLocal(char * buff);
 char * stristr (char *ch1, char *ch2);
+int FromLOC(char * Locator, double * pLat, double * pLon);
 
 VOID Consoleprintf(const char * format, ...)
 {
-	char Mess[255];
+	char Mess[512];
 	va_list(arglist);
 
 	va_start(arglist, format);
@@ -302,7 +307,8 @@ static char *keywords[] =
 "APPL5QUAL", "APPL6QUAL", "APPL7QUAL", "APPL8QUAL",
 "BTEXT:", "NETROMCALL", "C_IS_CHAT", "MAXRTT", "MAXHOPS",		// IPGATEWAY= no longer allowed
 "LogL4Connects", "LogAllConnects", "SAVEMH", "ENABLEADIFLOG", "ENABLEEVENTS", "SAVEAPRSMSGS", 
-"EnableM0LTEMap"
+"EnableM0LTEMap", "MQTT", "MQTT_HOST", "MQTT_PORT", "MQTT_USER", "MQTT_PASS",
+"L4Compress", "L4CompMaxframe", "L4CompPaclen", "L2Compress", "L2CompMaxframe", "L2CompPaclen"
 };           /* parameter keywords */
 
 static void * offset[] =
@@ -323,7 +329,8 @@ static void * offset[] =
 &xxcfg.C_APPL[4].ApplQual, &xxcfg.C_APPL[5].ApplQual, &xxcfg.C_APPL[6].ApplQual, &xxcfg.C_APPL[7].ApplQual,
 &xxcfg.C_BTEXT, &xxcfg.C_NETROMCALL, &xxcfg.C_C, &xxcfg.C_MAXRTT, &xxcfg.C_MAXHOPS,		// IPGATEWAY= no longer allowed
 &xxcfg.C_LogL4Connects, &xxcfg.C_LogAllConnects, &xxcfg.C_SaveMH, &xxcfg.C_ADIF, &xxcfg.C_EVENTS, &xxcfg.C_SaveAPRSMsgs,
-&xxcfg.C_M0LTEMap};		/* offset for corresponding data in config file */
+&xxcfg.C_M0LTEMap, &xxcfg.C_MQTT, &xxcfg.C_MQTT_HOST, &xxcfg.C_MQTT_PORT, &xxcfg.C_MQTT_USER, &xxcfg.C_MQTT_PASS,
+&xxcfg.C_L4Compress, &xxcfg.C_L4CompMaxframe, &xxcfg.C_L4CompPaclen, &xxcfg.C_L2Compress, &xxcfg.C_L2CompMaxframe, &xxcfg.C_L2CompPaclen};		/* offset for corresponding data in config file */
 
 static int routine[] = 
 {
@@ -342,8 +349,9 @@ static int routine[] =
 14, 14, 14, 14,
 14, 14 ,14, 14,
 15, 0, 2, 9, 9,
-2, 2, 2, 2, 2, 2,
-2} ;			// Routine to process param
+2, 2, 1, 2, 2, 2,
+2, 2, 0, 1, 20, 20,
+1, 1, 1, 1, 1, 1} ;			// Routine to process param
 
 int PARAMLIM = sizeof(routine)/sizeof(int);
 //int NUMBEROFKEYWORDS = sizeof(routine)/sizeof(int);
@@ -365,7 +373,7 @@ static char *pkeywords[] =
 "BCALL", "DIGIMASK", "NOKEEPALIVES", "COMPORT", "DRIVER", "WL2KREPORT", "UIONLY",
 "UDPPORT", "IPADDR", "I2CBUS", "I2CDEVICE", "UDPTXPORT", "UDPRXPORT", "NONORMALIZE",
 "IGNOREUNLOCKEDROUTES", "INP3ONLY", "TCPPORT", "RIGPORT", "PERMITTEDAPPLS", "HIDE",
-"SMARTID", "KISSCOMMAND", "SendtoM0LTEMap", "PortFreq", "M0LTEMapInfo", "QTSMPort"};           /* parameter keywords */
+"SMARTID", "KISSCOMMAND", "SendtoM0LTEMap", "PortFreq", "M0LTEMapInfo", "QTSMPort"};         /* parameter keywords */
 
 static void * poffset[] =
 {
@@ -506,7 +514,6 @@ BOOL ProcessConfig()
 	if ((fp1 = fopen(inputname,"r")) == NULL)
 	{
 		Consoleprintf("Could not open file %s Error code %d", inputname, errno);
-
 		return FALSE;
 	}
 
@@ -606,6 +613,18 @@ BOOL ProcessConfig()
 	paramok[79]=1;			// SaveAPRSMsgs optional
 	paramok[79]=1;			// SaveAPRSMsgs optional
 	paramok[80]=1;			// EnableM0LTEMap optional
+	paramok[81]=1;			// MQTT Params
+	paramok[82]=1;			// MQTT Params
+	paramok[83]=1;			// MQTT Params
+	paramok[84]=1;			// MQTT Params
+	paramok[85]=1;			// MQTT Params
+	paramok[86]=1;			// L4Compress
+	paramok[87]=1;			// L4Compress Maxframe
+	paramok[88]=1;			// L4Compress Paclen
+	paramok[89]=1;			// L2Compress
+	paramok[90]=1;			// L2Compress Maxframe
+	paramok[91]=1;			// L2Compress Paclen
+
 
 	for (i=0; i < PARAMLIM; i++)
 	{
@@ -638,7 +657,7 @@ BOOL ProcessConfig()
 	if (LOCATOR[0] == 0 && LocSpecified == 0 && RFOnly == 0)
 	{
 		Consoleprintf("");
-		Consoleprintf("Please enter a LOCATOR statment in your BPQ32.cfg");
+		Consoleprintf("Please enter a LOCATOR statement in your BPQ32.cfg");
 		Consoleprintf("If you really don't want to be on the Node Map you can enter LOCATOR=NONE");
 		Consoleprintf("");
 
@@ -918,11 +937,21 @@ NextAPRS:
 				strcat(LOCATOR, ":");
 				strcat(LOCATOR, ptr2);
 				ToLOC(atof(ptr1), atof(ptr2), LOC);
+				LatFromLOC = atof(ptr1);
+				LonFromLOC = atof(ptr2);
+
 			}
 			else
 			{
 				if (strlen(ptr1) == 6)
+				{
 					strcpy(LOC, ptr1);
+					FromLOC(LOC, &LatFromLOC, &LonFromLOC);
+					// Randomise in square
+					LatFromLOC += ((rand() / 24.0) / RAND_MAX);
+					LonFromLOC += ((rand() / 12.0) / RAND_MAX);
+
+				}
 			}
 		}
 		return 0;
@@ -1151,6 +1180,26 @@ NextAPRS:
 
 		return 0;
 	}
+
+
+	if (_memicmp("MQTT_HOST=", rec, 10) == 0)
+	{
+		strcpy(xxcfg.C_MQTT_HOST, &rec[10]);
+		xxcfg.C_MQTT_HOST[strlen(xxcfg.C_MQTT_HOST)-1] = '\0';
+		return 0;
+	}
+	if (_memicmp("MQTT_USER=", rec, 10) == 0)
+	{
+		strcpy(xxcfg.C_MQTT_USER, &rec[10]);
+		xxcfg.C_MQTT_USER[strlen(xxcfg.C_MQTT_USER)-1] = '\0';
+		return 0;
+	}
+	if (_memicmp("MQTT_PASS=", rec, 10) == 0)
+	{
+		strcpy(xxcfg.C_MQTT_PASS, &rec[10]);
+		xxcfg.C_MQTT_PASS[strlen(xxcfg.C_MQTT_PASS)-1] = '\0';
+		return 0;
+}
 
 
 	if (xindex(rec,"=") >= 0)
@@ -1491,7 +1540,7 @@ int dotext(char * val, char * key_word, int max)
 
 	if (len > max)
 	{
-		Consoleprintf("Text too long: %s\r\n",key_word);
+		Consoleprintf("Text too long: %s (max %d\r\n",key_word, max);
 		return(0);
 	}
 
@@ -1714,8 +1763,7 @@ int tncports(int i)
 /*   FIND OCCURENCE OF ONE STRING WITHIN ANOTHER			*/
 /************************************************************************/
 
-int xindex(s, t)
-char s[], t[];
+int xindex(char s[], char t[])
 {
 	int i, j ,k;
 
@@ -1734,8 +1782,7 @@ char s[], t[];
 /*   FIND FIRST OCCURENCE OF A CHARACTER THAT IS NOT c			*/
 /************************************************************************/
 
-int verify(s, c)
-char s[], c;
+int verify(char s[], char c)
 {
 	int i;
 
@@ -2256,10 +2303,7 @@ int decode_port_rec(char * rec)
 }
 
 
-int doid(i, value, rec)
-int i;
-char value[];
-char rec[];
+int doid(int i, char value[], char rec[])
 {
 	unsigned int j;
 	for (j = 3;( j < (unsigned int)strlen(rec)+1); j++)
@@ -2293,10 +2337,7 @@ char rec[];
 	return(1);
 }
 
-int dodll(i, value, rec)
-int i;
-char value[];
-char rec[];
+int dodll(int i, char value[], char rec[])
 {
 	unsigned int j;
 
@@ -2371,11 +2412,11 @@ int doSerialPortName(int i, char * value, char * rec)
 {
 	rec += 8;
 
-	if (strlen(rec) > 79)
+	if (strlen(rec) > 250)
 	{
 	   Consoleprintf("Serial Port Name too long - Truncated");
 	   Consoleprintf("%s\r\n",rec);
-	   rec[79] = 0;
+	   rec[250] = 0;
 	}
 
 	strlop(rec, ' ');
@@ -2383,7 +2424,7 @@ int doSerialPortName(int i, char * value, char * rec)
 	if (IsNumeric(rec))
 		xxp.IOADDR = atoi(rec);
 	else
-		strcpy(xxp.SerialPortName, rec);
+		xxp.SerialPortName = _strdup(rec);
 
 	return 1;
 }
@@ -2416,10 +2457,7 @@ int doKissCommand(int i, char * value, char * rec)
 }
 
 
-int hwtypes(i, value, rec)
-int i;
-char value[];
-char rec[];
+int hwtypes(int i, char value[], char rec[])
 {
 	hw = 255;
 	if (_stricmp(value,"ASYNC") == 0)
@@ -2502,10 +2540,7 @@ char rec[];
 
 	return(1);
 }
-int protocols(i, value, rec)
-int i;
-char value[];
-char rec[];
+int protocols(int i, char value[], char rec[])
 {
 	int hw;
 
@@ -2539,10 +2574,7 @@ char rec[];
 }
 
 
-int bbsflag(i, value, rec)
-int i;
-char value[];
-char rec[];
+int bbsflag(int i, char value[],char rec[])
 {
 	int hw=255;
 
@@ -2593,10 +2625,7 @@ int validcalls(int i, char * value, char * rec)
 }
 
 
-int kissoptions(i, value, rec)
-int i;
-char value[];
-char rec[];
+int kissoptions(int i, char value[], char rec[])
 {
 	int err=255;
 
@@ -2648,7 +2677,19 @@ static int troutine[] =
 
 #define TPARAMLIM 6
 
-extern CMDX TNCCOMMANDLIST[];
+
+typedef struct _TCMDX
+{
+	char String[12];			// COMMAND STRING
+	UCHAR CMDLEN;				// SIGNIFICANT LENGTH
+	VOID (* CMDPROC)(struct TNCDATA * TNC, char * Tail, struct _TCMDX * CMD);// COMMAND PROCESSOR
+	size_t CMDFLAG;				// FLAG/VALUE Offset
+
+} TCMDX;
+
+
+
+extern TCMDX TNCCOMMANDLIST[];
 extern int NUMBEROFTNCCOMMANDS;
 
 int decode_tnc_rec(char * rec)
@@ -2725,7 +2766,7 @@ int decode_tnc_rec(char * rec)
 			// Try process as TNC2 Command
 
 			int n = 0;
-			CMDX * CMD = &TNCCOMMANDLIST[0];
+			TCMDX * CMD = &TNCCOMMANDLIST[0];
 			char * ptr1 = key_word;
 			UCHAR * valueptr;
 

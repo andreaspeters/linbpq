@@ -20,7 +20,7 @@
 	<Configurations>
 		<Configuration
 			Name="Debug|Win32"
-			OutputDirectory="d:\devprogs\bpq32"
+			OutputDirectory="C:\Dev\Msdev2005\$(SolutionName)\$(ProjectName)\$(ConfigurationName)"
 			IntermediateDirectory="C:\Dev\Msdev2005\Intermed\$(SolutionName)\$(ProjectName)\$(ConfigurationName)"
 			ConfigurationType="2"
 			CharacterSet="0"
@@ -50,7 +50,7 @@
 				Name="VCCLCompilerTool"
 				Optimization="0"
 				AdditionalIncludeDirectories="..\CInclude;..\CommonSource;..\CKernel"
-				PreprocessorDefinitions="WIN32;_DEBUG;_WINDOWS;_USRDLL;BPQ32_EXPORTS;MDIKERNEL;_USE_32BIT_TIME_T;BPQ32"
+				PreprocessorDefinitions="WIN32;_DEBUG;_WINDOWS;_USRDLL;BPQ32_EXPORTS;MDIKERNEL;_USE_32BIT_TIME_T;BPQ32;NOMQTT"
 				MinimalRebuild="true"
 				BasicRuntimeChecks="3"
 				RuntimeLibrary="1"
@@ -159,7 +159,7 @@
 				Optimization="0"
 				WholeProgramOptimization="false"
 				AdditionalIncludeDirectories="..\CInclude;..\CommonSource;..\CKernel"
-				PreprocessorDefinitions="WIN32;NDEBUG;_WINDOWS;_USRDLL;BPQ32_EXPORTS;MDIKERNEL;_USE_32BIT_TIME_T"
+				PreprocessorDefinitions="WIN32;NDEBUG;_WINDOWS;_USRDLL;BPQ32_EXPORTS;MDIKERNEL;_USE_32BIT_TIME_T;NOMQTT"
 				RuntimeLibrary="0"
 				UsePrecompiledHeader="0"
 				AssemblerOutput="2"
@@ -439,6 +439,18 @@
 				>
 			</File>
 			<File
+				RelativePath=".\mqtt.c"
+				>
+				<FileConfiguration
+					Name="Debug|Win32"
+					>
+					<Tool
+						Name="VCCLCompilerTool"
+						CompileAs="1"
+					/>
+				</FileConfiguration>
+			</File>
+			<File
 				RelativePath="..\CommonSource\MULTIPSK.c"
 				>
 			</File>
@@ -508,6 +520,10 @@
 			</File>
 			<File
 				RelativePath="..\CommonSource\PortMapper.c"
+				>
+			</File>
+			<File
+				RelativePath=".\RHP.c"
 				>
 			</File>
 			<File
@@ -589,7 +605,7 @@
 				>
 			</File>
 			<File
-				RelativePath="..\CommonSource\CHeaders.h"
+				RelativePath=".\cheaders.h"
 				>
 			</File>
 			<File

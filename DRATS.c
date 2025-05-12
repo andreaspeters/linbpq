@@ -21,7 +21,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #define _CRT_SECURE_NO_DEPRECATE
 
-#include "CHeaders.h"
+#include "cheaders.h"
 
 #include "bpq32.h"
 #include "telnetserver.h"
@@ -168,7 +168,7 @@ int AllocateDRATSStream(struct DRATSSession * Sess)
 
 	if (Stream == 255) return 0;
 
-	if (memcmp(Sess->CallTo, "NODE", 6) == 0)
+	if (memcmp(Sess->CallTo, "NODE", 4) == 0)
 	{
 		//  Just connect to command level on switch
 	}
@@ -563,7 +563,7 @@ void DRATSConnectionLost(struct ConnectionInfo * sockptr)
 #define ZEXPORT __stdcall
 #endif
 
-#include "zlib.h"
+#include <zlib.h>
 
 
 int doinflate(unsigned char * source, unsigned char * dest, int Len, int destlen, int * outLen)

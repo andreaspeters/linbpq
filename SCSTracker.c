@@ -31,7 +31,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #define MaxStreams 1	
 
-#include "CHeaders.h"
+#include "cheaders.h"
 #include "tncinfo.h"
 
 //#include "bpq32.h"
@@ -52,7 +52,6 @@ extern char LOC[];
 static RECT Rect;
 
 VOID __cdecl Debugprintf(const char * format, ...);
-char * strlop(char * buf, char delim);
 
 char NodeCall[11];		// Nodecall, Null Terminated
 
@@ -667,7 +666,8 @@ void * TrackerExtInit(EXTPORTDATA *  PortEntry)
 	}
 	
 	TNC->Port = port;
-	TNC->Hardware = H_TRK;
+	TNC->PortRecord = PortEntry;
+	TNC->PortRecord->PORTCONTROL.HWType = TNC->Hardware = H_TRK;
 
 	// Set up DED addresses for streams
 	
@@ -682,8 +682,6 @@ void * TrackerExtInit(EXTPORTDATA *  PortEntry)
 	PortEntry->MAXHOSTMODESESSIONS = 1;				//TNC->PacketChannels + 1;
 	PortEntry->PERMITGATEWAY = TRUE;				// Can change ax.25 call on each stream
 	PortEntry->SCANCAPABILITIES = NONE;				// Scan Control 3 stage/conlock 
-
-	TNC->PortRecord = PortEntry;
 
 	if (PortEntry->PORTCONTROL.PORTCALL[0] == 0)
 		memcpy(TNC->NodeCall, MYNODECALL, 10);
@@ -1267,7 +1265,7 @@ reinit:
 				}
 
 				Poll[1] = 0;			// Data
-				TNC->Streams[Stream].BytesTXed += datalen;
+				TNC->Streams[Stream].bytesTXed += datalen;
 
 				Poll[2] = datalen - 1;
 				memcpy(&Poll[3], Buffer, datalen);
@@ -1888,7 +1886,7 @@ VOID TrkProcessDEDFrame(struct TNCINFO * TNC)
 				{				
 					if (TNC->TXBuffer[4]== 'T')	// TX count Status
 					{
-						sprintf(TNC->WEB_TRAFFIC, "RX %d TX %d ACKED %s", TNC->Streams[Stream].BytesRXed, TNC->Streams[Stream].BytesTXed, Buffer);
+						sprintf(TNC->WEB_TRAFFIC, "RX %d TX %d ACKED %s", TNC->Streams[Stream].bytesRXed, TNC->Streams[Stream].bytesTXed, Buffer);
 						SetWindowText(TNC->xIDC_TRAFFIC, TNC->WEB_TRAFFIC);
 						TNC->WEB_CHANGED = TRUE;
 						return;
@@ -2027,7 +2025,7 @@ VOID TrkProcessDEDFrame(struct TNCINFO * TNC)
 				STREAM->Connected = TRUE;			// Subsequent data to data channel
 				STREAM->Connecting = FALSE;
 				STREAM->ConnectTime = time(NULL); 
-				STREAM->BytesRXed = STREAM->BytesTXed = 0;
+				STREAM->bytesRXed = STREAM->bytesTXed = 0;
 
 				if (TNC->SlowTimer)
 					Debugprintf("RP Incoming call to APPLCALL completed");
@@ -2175,7 +2173,7 @@ VOID TrkProcessDEDFrame(struct TNCINFO * TNC)
 							{
 								char AppName[13];
 
-								memcpy(AppName, &ApplPtr[App * sizeof(CMDX)], 12);
+								memcpy(AppName, &ApplPtr[App * sizeof(struct CMDX)], 12);
 								AppName[12] = 0;
 
 								// Make sure app is available
@@ -2385,7 +2383,7 @@ VOID TrkProcessDEDFrame(struct TNCINFO * TNC)
 		if (buffptr == NULL) return;			// No buffers, so ignore
 			
 		buffptr->Len = framelen;				// Length
-		TNC->Streams[Stream].BytesRXed += (int)buffptr->Len;
+		TNC->Streams[Stream].bytesRXed += (int)buffptr->Len;
 		memcpy(buffptr->Data, Msg, buffptr->Len);
 		
 		WritetoTrace(TNC, Msg, (int)buffptr->Len);

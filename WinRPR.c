@@ -31,7 +31,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #define MaxStreams 1	
 
-#include "CHeaders.h"
+#include "cheaders.h"
 
 
 extern int (WINAPI FAR *GetModuleFileNameExPtr)();
@@ -63,8 +63,6 @@ extern char LOC[];
 static RECT Rect;
 
 VOID __cdecl Debugprintf(const char * format, ...);
-char * strlop(char * buf, char delim);
-
 char NodeCall[11];		// Nodecall, Null Terminated
 
 static BOOL WriteCommBlock(struct TNCINFO * TNC);
@@ -797,7 +795,8 @@ void * WinRPRExtInit(EXTPORTDATA *  PortEntry)
 	WritetoConsoleLocal(msg);
 
 	TNC->Port = port;
-	TNC->Hardware = H_WINRPR;
+	TNC->PortRecord = PortEntry;
+	TNC->PortRecord->PORTCONTROL.HWType = TNC->Hardware = H_WINRPR;
 
 	// Set up DED addresses for streams
 	
@@ -812,8 +811,6 @@ void * WinRPRExtInit(EXTPORTDATA *  PortEntry)
 	PortEntry->MAXHOSTMODESESSIONS = 1;				//TNC->PacketChannels + 1;
 	PortEntry->PERMITGATEWAY = TRUE;				// Can change ax.25 call on each stream
 	PortEntry->SCANCAPABILITIES = NONE;				// Scan Control 3 stage/conlock 
-
-	TNC->PortRecord = PortEntry;
 
 	if (PortEntry->PORTCONTROL.PORTCALL[0] == 0)
 		memcpy(TNC->NodeCall, MYNODECALL, 10);
@@ -1583,8 +1580,6 @@ TNCRunning:
 
 	// Send INIT script
 
-	// VARA needs each command in a separate send
-
 	ptr1 = &TNC->InitScript[0];
 
 	GetSemaphore(&Semaphore, 52);
@@ -1609,7 +1604,6 @@ TNCRunning:
 			c = *(ptr2 + 1);		// Save next char
 			*(ptr2 + 1) = 0;		// Terminate string
 		}
-//		VARASendCommand(TNC, ptr1, TRUE);
 
 		if (ptr2)
 			*(1 + ptr2++) = c;		// Put char back 

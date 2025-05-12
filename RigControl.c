@@ -48,7 +48,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 #include <stdlib.h>
 #include "time.h"
 
-#include "CHeaders.h"
+#include "cheaders.h"
 #include "tncinfo.h"
 #ifdef WIN32
 #include <commctrl.h>
@@ -324,7 +324,7 @@ VOID Rig_PTTEx(struct RIGINFO * RIG, BOOL PTTState, struct TNCINFO * TNC)
 
 						// Convert to CAT string
 
-						sprintf(FreqString, "%012d", txfreq);
+						sprintf(FreqString, "%012lld", txfreq);
 
 						switch (PORT->PortType)
 						{
@@ -455,7 +455,7 @@ VOID Rig_PTTEx(struct RIGINFO * RIG, BOOL PTTState, struct TNCINFO * TNC)
 
 					// Convert to CAT string
 
-					sprintf(FreqString, "%012d", txfreq);
+					sprintf(FreqString, "%012lld", txfreq);
 
 					switch (PORT->PortType)
 					{
@@ -896,7 +896,7 @@ int Rig_CommandEx(struct RIGPORTINFO * PORT, struct RIGINFO * RIG, TRANSPORTENTR
 	// if Port starts with 'R' then select Radio (was Interlock) number, not BPQ Port
 
 	if (Command[0] == 'R')
-		n = sscanf(Command,"%s %s %s %s %s", &Dummy, &FreqString[0], &Mode[0], &FilterString[0], &Data[0]);
+		n = sscanf(Command,"%s %s %s %s %s", &Dummy[0], &FreqString[0], &Mode[0], &FilterString[0], &Data[0]);
 	else
 		n = sscanf(Command,"%d %s %s %s %s", &Port, &FreqString[0], &Mode[0], &FilterString[0], &Data[0]);
 
@@ -1117,7 +1117,7 @@ int Rig_CommandEx(struct RIGPORTINFO * PORT, struct RIGINFO * RIG, TRANSPORTENTR
 
 	if (_stricmp(FreqString, "POWER") == 0)
 	{
-		char PowerString[8] = "";
+		char PowerString[16] = "";
 		int Power = atoi(Mode);
 		int len;
 		char cmd[80];
@@ -1291,7 +1291,7 @@ int Rig_CommandEx(struct RIGPORTINFO * PORT, struct RIGINFO * RIG, TRANSPORTENTR
 
 			// use text command
 
-			Len = sprintf(CmdPtr, ptr1);
+			Len = sprintf(CmdPtr, "%s", ptr1);
 			break;
 
 		case YAESU:
@@ -2072,7 +2072,7 @@ int Rig_CommandEx(struct RIGPORTINFO * PORT, struct RIGINFO * RIG, TRANSPORTENTR
 
 	case HAMLIB:
 	{
-		char cmd[80];
+		char cmd[200];
 
 		int len = sprintf(cmd, "F %s\n+f\nM %s %d\n+m\n",
 			FreqString, Mode, atoi(Data));
@@ -3205,7 +3205,7 @@ VOID ReleasePermission(struct RIGINFO *RIG)
 	while (RIG->PortRecord[i])
 	{
 		PortRecord = RIG->PortRecord[i];
-		PortRecord->PORT_EXT_ADDR(6, PortRecord->PORTCONTROL.PORTNUMBER, 3);	// Release Perrmission
+		PortRecord->PORT_EXT_ADDR(6, PortRecord->PORTCONTROL.PORTNUMBER, (PDATAMESSAGE)3);	// Release Perrmission
 		i++;
 	}
 }
@@ -3235,7 +3235,7 @@ int GetPermissionToChange(struct RIGPORTINFO * PORT, struct RIGINFO *RIG)
 		// TNC has been asked for permission, and we are waiting respoonse
 		// Only SCS pactor returns WaitingForPrmission, so check shouldn't be called on others
 		
-		RIG->OKtoChange = (int)(intptr_t)RIG->PortRecord[0]->PORT_EXT_ADDR(6, RIG->PortRecord[0]->PORTCONTROL.PORTNUMBER, 2);	// Get Ok Flag
+		RIG->OKtoChange = (int)(intptr_t)RIG->PortRecord[0]->PORT_EXT_ADDR(6, RIG->PortRecord[0]->PORTCONTROL.PORTNUMBER, (PDATAMESSAGE)2);	// Get Ok Flag
 	
 		if (RIG->OKtoChange == 1)
 		{
@@ -3277,7 +3277,7 @@ int GetPermissionToChange(struct RIGPORTINFO * PORT, struct RIGINFO *RIG)
 		// not waiting for permission, so must be first call of a cycle
 
 		if (RIG->PortRecord[0] && RIG->PortRecord[0]->PORT_EXT_ADDR)
-			RIG->WaitingForPermission = (int)(intptr_t)RIG->PortRecord[0]->PORT_EXT_ADDR(6, RIG->PortRecord[0]->PORTCONTROL.PORTNUMBER, 1);	// Request Perrmission
+			RIG->WaitingForPermission = (int)(intptr_t)RIG->PortRecord[0]->PORT_EXT_ADDR(6, RIG->PortRecord[0]->PORTCONTROL.PORTNUMBER, (PDATAMESSAGE)1);	// Request Perrmission
 				
 		// If it returns zero there is no need to wait.
 		// Normally SCS Returns True for first call, but returns 0 if Link not running
@@ -3300,7 +3300,7 @@ CheckOtherPorts:
 	{
 		PortRecord = RIG->PortRecord[i];
 
-		if (PortRecord->PORT_EXT_ADDR && PortRecord->PORT_EXT_ADDR(6, PortRecord->PORTCONTROL.PORTNUMBER, 1))
+		if (PortRecord->PORT_EXT_ADDR && PortRecord->PORT_EXT_ADDR(6, PortRecord->PORTCONTROL.PORTNUMBER, (PDATAMESSAGE)1))
 		{
 			// 1 means can't change - release all
 
@@ -3392,7 +3392,7 @@ VOID DoBandwidthandAntenna(struct RIGINFO *RIG, struct ScanEntry * ptr)
 
 			RIG->CurrentBandWidth = ptr->Bandwidth;
 
-			PortRecord->PORT_EXT_ADDR(6, PortRecord->PORTCONTROL.PORTNUMBER, ptr);
+			PortRecord->PORT_EXT_ADDR(6, PortRecord->PORTCONTROL.PORTNUMBER, (PDATAMESSAGE)ptr);
 
 /*			if (ptr->Bandwidth == 'R')			// Robust Packet
 				PortRecord->PORT_EXT_ADDR(6, PortRecord->PORTCONTROL.PORTNUMBER, 6);	// Set Robust Packet
@@ -5286,8 +5286,12 @@ BOOL DecodeModePtr(char * Param, double * Dwell, double * Freq, char * Mode,
 
 	ptr = strtok_s(NULL, ",", &Context);
 
+	if (ptr == NULL)
+		if (*MemoryNumber)		// If channel, dont need mode
+			return TRUE;
+
 	if (ptr == NULL || strlen(ptr) >  8)
-		return FALSE;
+		return FALSE;		// Mode Missing
 
 	// If channel, dont need mode
 
@@ -7252,7 +7256,7 @@ CheckScan:
 		}
 		else if	(PORT->PortType == FT991A || PORT->PortType == FTDX10)
 		{	
-			FreqPtr[0]->Cmd1Len = sprintf(CmdPtr, "FA%s;MD0%X;FA;MD0;", &FreqString, ModeNo);
+			FreqPtr[0]->Cmd1Len = sprintf(CmdPtr, "FA%s;MD0%X;FA;MD0;", &FreqString[0], ModeNo);
 		}
 		else if	(PORT->PortType == FT100 || PORT->PortType == FT990
 			|| PORT->PortType == FT1000)
@@ -7393,6 +7397,8 @@ VOID SetupScanInterLockGroups(struct RIGINFO *RIG)
 	int Interlock = RIG->Interlock;
 	char PortString[128] = "";
 	char TxPortString[128] = "";
+	int n = 0;
+	int nn = 0;
 
 	// Find TNC ports in this Rig's scan group
 
@@ -7409,7 +7415,7 @@ VOID SetupScanInterLockGroups(struct RIGINFO *RIG)
 		{
 			int p = PortRecord->PORTNUMBER;
 			RIG->BPQPort |= ((uint64_t)1 << p);
-			sprintf(PortString, "%s,%d", PortString, p);
+			n += sprintf(&PortString[n], ",%d", p);
 			TNC->RIG = RIG;
 
 			if (RIG->PTTMode == 0 && TNC->PTTMode)
@@ -7419,7 +7425,7 @@ VOID SetupScanInterLockGroups(struct RIGINFO *RIG)
 		{
 			int p = PortRecord->PORTNUMBER;
 			RIG->BPQPort |= ((uint64_t)1 << p);
-			sprintf(TxPortString, "%s,%d", TxPortString, p);
+			nn += sprintf(&TxPortString[nn], ",%d", p);
 			TNC->TXRIG = RIG;
 
 			if (RIG->PTTMode == 0 && TNC->PTTMode)
@@ -8139,7 +8145,7 @@ void ProcessFLRIGFrame(struct RIGPORTINFO * PORT)
 
 void HLSetMode(SOCKET Sock, struct RIGINFO * RIG, unsigned char * Msg, char sep)
 {
-	char Resp[80];
+	char Resp[120];
 	int Len;
 	char mode[80] = "";
 	int filter = 0;
@@ -8385,7 +8391,7 @@ int ProcessHAMLIBSlaveMessage(SOCKET Sock, struct RIGINFO * RIG, unsigned char *
 
 	switch (Msg[0])
 	{
-	case 'f':			// Get Freqency
+	case 'f':			// Get Frequency
 
 		HLGetFreq(Sock, RIG, sep);
 		return 0;
@@ -9422,7 +9428,7 @@ return TRUE;
 
 #include <stdio.h>
 #include <stdlib.h>
-//#include <stdint.h>
+//
 //#include <windows.h>
 #include <setupapi.h>
 //#include <ddk/hidsdi.h>
@@ -9938,14 +9944,10 @@ void ProcessSDRANGELFrame(struct RIGPORTINFO * PORT)
 	int Length;
 
 	char * msg;
-	char * rest;
 
 	struct RIGINFO * RIG;
 	char * ptr, * ptr1, * ptr2, * ptr3, * pos;
-	int Len, TotalLen;
 	char cmd[80];
-	char ReqBuf[256];
-	char SendBuff[256];
 	int chunklength;
 	int headerlen;
 	int i, n = 0;
@@ -10168,7 +10170,7 @@ VOID ConnecttoSDRANGEL(struct RIGPORTINFO * PORT)
 VOID SDRANGELThread(struct RIGPORTINFO * PORT)
 {
 	// Opens sockets and looks for data
-	char Msg[255];
+	char Msg[512];
 	int err, i, ret;
 	u_long param=1;
 	BOOL bcopt=TRUE;
@@ -10332,7 +10334,6 @@ VOID SDRANGELPoll(struct RIGPORTINFO * PORT)
 
 	struct RIGINFO * RIG = &PORT->Rigs[0];
 	int Len, i;
-	char ReqBuf[256];
 	char SendBuff[256];
 	//char * SDRANGEL_GETheader = "GET /sdrangel/deviceset/%d/device/settings "
 	//			   "HTTP/1.1\nHost: %s\nConnection: keep-alive\n\r\n";
@@ -10379,7 +10380,6 @@ VOID SDRANGELPoll(struct RIGPORTINFO * PORT)
 			if (GetPermissionToChange(PORT, RIG))
 			{
 				char cmd[80];
-				double freq;
 
 				if (RIG->RIG_DEBUG)
 					Debugprintf("BPQ32 Change Freq to %9.4f", PORT->FreqPtr->Freq);
@@ -10451,7 +10451,6 @@ VOID SDRANGELPoll(struct RIGPORTINFO * PORT)
 VOID SDRANGELSendCommand(struct RIGPORTINFO * PORT, char * Command, char * Value)
 {
 	int Len, ret;
-	char ReqBuf[512];
 	char SendBuff[512];
 	char ValueString[256] ="";
 	char * SDRANGEL_PATCHheader = "PATCH /sdrangel/deviceset/%d/device/settings "

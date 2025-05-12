@@ -70,7 +70,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 #include <stdio.h>
 #include <time.h>
 
-#include "CHeaders.h"
+#include "cheaders.h"
 
 #ifdef WIN32
 #include <Psapi.h>
@@ -139,6 +139,10 @@ VOID WritetoTraceSupport(struct TNCINFO * TNC, char * Msg, int Len)
 	int LineLen, i;
 	UCHAR Save;
 	int SaveLen = Len;
+	char Time[16];
+	time_t T;
+	struct tm * tm;
+
 	if (Len < 0)
 		return;
 
@@ -206,10 +210,16 @@ lineloop:
 #endif
 			// Write to Web Buffer
 
+			T = time(NULL);
+			tm = gmtime(&T);
+	
+			sprintf_s(Time, sizeof(Time),"%02d:%02d ", tm->tm_hour, tm->tm_min);
+
+			strcat(TNC->WebBuffer, Time);
 			strcat(TNC->WebBuffer, Line);
 			strcat(TNC->WebBuffer, "\r\n");
 			if (strlen(TNC->WebBuffer) > 4500)
-				memmove(TNC->WebBuffer, &TNC->WebBuffer[500], 4490);	// Make sure null is moved
+				memmove(TNC->WebBuffer, &TNC->WebBuffer[500], strlen(&TNC->WebBuffer[500]) + 1);	// Make sure null is moved
 		Skip:
 			ptr1 = ptr2;
 
@@ -248,10 +258,16 @@ lineloop:
 #else
 			index=SendMessage(TNC->hMonitor, LB_ADDSTRING, 0, (LPARAM)(LPCTSTR) ptr1 );
 #endif
+			T = time(NULL);
+			tm = gmtime(&T);
+	
+			sprintf_s(Time, sizeof(Time),"%02d:%02d ", tm->tm_hour, tm->tm_min);
+			strcat(TNC->WebBuffer, Time);
+
 			strcat(TNC->WebBuffer, ptr1);
 			strcat(TNC->WebBuffer, "\r\n");
 			if (strlen(TNC->WebBuffer) > 4500)
-				memmove(TNC->WebBuffer, &TNC->WebBuffer[500], 4490);	// Make sure null is moved
+				memmove(TNC->WebBuffer, &TNC->WebBuffer[500], strlen(&TNC->WebBuffer[500]) + 1);	// Make sure null is moved
 		}
 	}
 
@@ -508,7 +524,7 @@ static int ProcessLine(char * buf, int Port)
 
 void WINMORThread(void * portptr);
 VOID ProcessDataSocketData(int port);
-int ConnecttoWINMOR();
+int ConnecttoWINMOR(int port);
 static int ProcessReceivedData(struct TNCINFO * TNC);
 int V4ProcessReceivedData(struct TNCINFO * TNC);
 VOID ReleaseTNC(struct TNCINFO * TNC);
@@ -915,7 +931,7 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 			txlen = buffptr->Len;
 			memcpy(txbuff, buffptr->Data, txlen);
 			bytes = send(TNC->TCPDataSock, txbuff, (int)txlen, 0);
-			STREAM->BytesTXed += bytes;
+			STREAM->bytesTXed += bytes;
 			WritetoTrace(TNC, txbuff, (int)txlen);
 			ReleaseBuffer(buffptr);
 		}
@@ -941,7 +957,7 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 			}
 
 			bytes = send(TNC->TCPDataSock,buff->L2DATA, (int)txlen, 0);
-			STREAM->BytesTXed += bytes;
+			STREAM->bytesTXed += bytes;
 			WritetoTrace(TNC, &buff->L2DATA[0], (int)txlen);
 
 		}
@@ -984,8 +1000,12 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 
 			if (_memicmp(&buff->L2DATA[0], "RADIO ", 6) == 0)
 			{
-				sprintf(&buff->L2DATA[0], "%d %s", TNC->Port, &buff->L2DATA[6]);
+				char cmd[56];
 
+				strcpy(cmd, &buff->L2DATA[6]);
+				sprintf(&buff->L2DATA[0], "%d %s", TNC->Port, &cmd);
+
+	
 				if (Rig_Command(TNC->PortRecord->ATTACHEDSESSIONS[0]->L4CROSSLINK, &buff->L2DATA[0]))
 				{
 				}
@@ -1462,11 +1482,12 @@ void * WinmorExtInit(EXTPORTDATA * PortEntry)
 	}
 
 	TNC->Port = port;
+	TNC->PortRecord = PortEntry;
 
 	if (TNC->ProgramPath)
 		TNC->WeStartedTNC = RestartTNC(TNC);
 
-	TNC->Hardware = H_WINMOR;
+	TNC->PortRecord->PORTCONTROL.HWType = TNC->Hardware = H_WINMOR;
 
 	if (TNC->BusyWait == 0)
 		TNC->BusyWait = 10;
@@ -1474,7 +1495,6 @@ void * WinmorExtInit(EXTPORTDATA * PortEntry)
 	if (TNC->BusyHold == 0)
 		TNC->BusyHold = 1;
 
-	TNC->PortRecord = PortEntry;
 
 	if (PortEntry->PORTCONTROL.PORTCALL[0] == 0)
 		memcpy(TNC->NodeCall, MYNODECALL, 10);
@@ -2106,7 +2126,7 @@ VOID ProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 		FreeSemaphore(&Semaphore);
 
 		STREAM->ConnectTime = time(NULL); 
-		STREAM->BytesRXed = STREAM->BytesTXed = STREAM->PacketsSent = 0;
+		STREAM->bytesRXed = STREAM->bytesTXed = STREAM->PacketsSent = 0;
 
 		if (TNC->StartInRobust)
 			send(TNC->TCPSock, "ROBUST TRUE\r\n", 13, 0);
@@ -2207,7 +2227,7 @@ VOID ProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 				PMSGWITHLEN buffptr = Q_REM(&STREAM->BPQtoPACTOR_Q);
 
 				send(TNC->TCPDataSock, buffptr->Data, (int)buffptr->Len, 0);
-				STREAM->BytesTXed += (int)buffptr->Len;
+				STREAM->bytesTXed += (int)buffptr->Len;
 				WritetoTrace(TNC, buffptr->Data, (int)buffptr->Len);
 				ReleaseBuffer(buffptr);
 			}
@@ -2231,7 +2251,7 @@ VOID ProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 			{
 				char AppName[13];
 
-				memcpy(AppName, &ApplPtr[App * sizeof(CMDX)], 12);
+				memcpy(AppName, &ApplPtr[App * sizeof(struct CMDX)], 12);
 				AppName[12] = 0;
 
 				// Make sure app is available
@@ -2368,22 +2388,7 @@ VOID ProcessResponse(struct TNCINFO * TNC, UCHAR * Buffer, int MsgLen)
 
 		if (TNC->Streams[0].Connected)
 		{
-			// Create a traffic record
-		
-			char logmsg[120];	
-			time_t Duration;
-
-			Duration = time(NULL) - STREAM->ConnectTime;
-
-			if (Duration == 0)
-				Duration = 1;		// Avoid zero divide
-	
-			sprintf(logmsg,"Port %2d %9s Bytes Sent %d  BPS %d Bytes Received %d BPS %d Time %d Seconds",
-				TNC->Port, STREAM->RemoteCall,
-				STREAM->BytesTXed, (int)(STREAM->BytesTXed/Duration),
-				STREAM->BytesRXed, (int)(STREAM->BytesRXed/Duration), (int)Duration);
-
-			Debugprintf(logmsg);
+			hookL4SessionDeleted(TNC, STREAM);
 
 			GetSemaphore(&Semaphore, 50);
 			WritetoTrace(TNC, Buffer, MsgLen - 2);
@@ -2708,7 +2713,7 @@ loop:
 		return;					
 	}
 
-	STREAM->BytesRXed += InputLen;
+	STREAM->bytesRXed += InputLen;
 
 	msg = &buffptr->Data[0];
 	msg[InputLen] = 0;	

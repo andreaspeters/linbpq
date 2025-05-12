@@ -26,7 +26,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 #include <stdio.h>
 #include <stdlib.h>
 #include "time.h"
-#include "CHeaders.h"
+#include "cheaders.h"
 #include "tncinfo.h"
 #include "adif.h"
 #include "telnetserver.h"
@@ -409,8 +409,7 @@ BOOL WriteADIFRecord(ADIF * ADIF)
 		strcat(Value, "logs/BPQ_CMS_ADIF");
 	}
 
-	sprintf(Value, "%s_%04d%02d.adi", Value,
-				tm->tm_year +1900, tm->tm_mon+1);
+	sprintf(&Value[strlen(Value)], "_%04d%02d.adi", tm->tm_year +1900, tm->tm_mon+1);
 
 	STAT.st_size = 0;
 	stat(Value, &STAT);
@@ -608,7 +607,6 @@ VOID ADIFWriteFreqList()
 	fprintf(Handle, "Base Callsign=%s\r\n", Call);
 
 	fprintf(Handle, "[Channels]\r\n");
-
 
 	for (i = 0; i < freqCount; i++)
 		fprintf(Handle, "Frequency %d=%lld\r\n" , i + 1, Freqs[i]); 

@@ -56,7 +56,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #define _CRT_SECURE_NO_DEPRECATE
 
-#include "CHeaders.h"
+#include "cheaders.h"
 #ifndef WIN32
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -87,7 +87,7 @@ void CreateMHWindow();
 int Update_MH_List(struct in_addr ipad, char * call, char proto);
 
 static BOOL ReadConfigFile(int Port);
-int ConnecttoAGW();
+int ConnecttoAGW(int port);
 int ProcessReceivedData(int bpqport);
 static int ProcessLine(char * buf, int Port, BOOL CheckPort);
 

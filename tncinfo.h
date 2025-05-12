@@ -222,14 +222,20 @@ struct STREAMINFO
 	char MyCall[10]	;			// Call we are using
 	char RemoteCall[10];		// Callsign
 
+	char callingCall[10];		// for reporting. Link and Our calls depand on which end connected
+	char receivingCall[10];		// for reporting. Link and Our calls depand on which end connected
+	char Direction[4];			// In or Out
+
+
+
 	char AGWKey[21];			// Session Key for AGW Session Based Drivers
 
 	time_t ConnectTime;			// Time connection made
 	time_t AttachTime;
 
-	int BytesTXed;
+	int bytesTXed;
 	int BytesAcked;
-	int BytesRXed;
+	int bytesRXed;
 	int PacketsSent;
 	int BytesResent;
 	int BytesOutstanding;		// For Packet Channels
@@ -808,9 +814,9 @@ typedef struct TNCINFO
 	HMENU hMenu;
 	HMENU hWndMenu;
 
-	VOID (* SuspendPortProc) ();
-	VOID (* ReleasePortProc) ();
-	VOID (* ForcedCloseProc) ();
+	VOID (* SuspendPortProc) (struct TNCINFO * TNC, struct TNCINFO * ThisTNC);
+	VOID (* ReleasePortProc) (struct TNCINFO * TNC);
+	VOID (* ForcedCloseProc) (struct TNCINFO * TNC, int Stream);
 
 	time_t WinmorRestartCodecTimer;
 	int WinmorCurrentMode;
@@ -865,9 +871,10 @@ typedef struct TNCINFO
 
 VOID * zalloc(int len);
 
-BOOL ReadConfigFile(int Port, int ProcLine());
+BOOL ReadConfigFile(int Port, int ProcLine(char * buf, int Port));
 int GetLine(char * buf);
-BOOL CreatePactorWindow(struct TNCINFO * TNC, char * ClassName, char * WindowTitle, int RigControlRow, WNDPROC WndProc, int Width, int Height, VOID ForcedCloseProc());
+BOOL CreatePactorWindow(struct TNCINFO * TNC, char * ClassName, char * WindowTitle, int RigControlRow, WNDPROC WndProc,
+						int Width, int Height, VOID ForcedCloseProc(struct TNCINFO * TNC, int Stream));
 char * CheckAppl(struct TNCINFO * TNC, char * Appl);
 BOOL SendReporttoWL2K(struct TNCINFO * TNC);
 struct WL2KInfo * DecodeWL2KReportLine(char *  buf);
@@ -887,7 +894,9 @@ static VOID ForcedClose(struct TNCINFO * TNC, int Stream);
 static VOID CloseComplete(struct TNCINFO * TNC, int Stream);
 
 VOID CheckForDetach(struct TNCINFO * TNC, int Stream, struct STREAMINFO * STREAM,
-				VOID TidyClose(), VOID ForcedClose(), VOID CloseComplete());
+	VOID TidyCloseProc(struct TNCINFO * TNC, int Stream), VOID ForcedCloseProc(struct TNCINFO * TNC, int Stream),
+	VOID CloseComplete(struct TNCINFO * TNC, int Stream));
+
 
 BOOL InterlockedCheckBusy(struct TNCINFO * ThisTNC);
 

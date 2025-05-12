@@ -30,8 +30,17 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 #include "time.h"
 #include "stdio.h"
 				 
-#include "CHeaders.h"
+#include "cheaders.h"
 #include "tncinfo.h"
+
+// This is needed to link with a lib built from source
+
+#ifdef WIN32
+#define ZEXPORT __stdcall
+#endif
+
+#include <zlib.h>
+
 
 #define	PFBIT 0x10		// POLL/FINAL BIT IN CONTROL BYTE
 
@@ -47,8 +56,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 #define	THREESECS 3*3
 
 
-VOID L2SENDCOMMAND();
-VOID L2ROUTINE();
+VOID L2Routine(struct PORTCONTROL * PORT, PMESSAGE Buffer);
 MESSAGE * SETUPL2MESSAGE(struct _LINKTABLE * LINK, UCHAR CMD);
 VOID SendSupervisCmd(struct _LINKTABLE * LINK);
 void SEND_RR_RESP(struct _LINKTABLE * LINK, UCHAR PF);
@@ -110,9 +118,9 @@ int seeifInterlockneeded(struct PORTCONTROL * PORT);
 int seeifUnlockneeded(struct _LINKTABLE * LINK);
 int CheckKissInterlock(struct PORTCONTROL * MYPORT, int Exclusive);
 void hookL2SessionAccepted(int Port, char * fromCall, char * toCall, struct _LINKTABLE * LINK);
-void hookL2SessionDeleted(int Port, char * fromCall, char * toCall, struct _LINKTABLE * LINK);
+void hookL2SessionDeleted(struct _LINKTABLE * LINK);
 void hookL2SessionAttempt(int Port, char * fromCall, char * toCall, struct _LINKTABLE * LINK);
-
+int L2Compressit(unsigned char * Out, int OutSize, unsigned char * In, int Len);
 
 extern int REALTIMETICKS;
 
@@ -127,11 +135,13 @@ extern int REALTIMETICKS;
 #define	SDINVC 1		// INVALID COMMAND
 #define	SDNRER 8		// INVALID N(R)
 
-
+extern int L2Compress;
+extern int L2CompMaxframe;
+extern int L2CompPaclen;
 
 UCHAR NO_CTEXT = 0;
 UCHAR ALIASMSG = 0;
-extern UINT APPLMASK;
+
 static UCHAR ISNETROMMSG = 0;
 UCHAR MSGFLAG = 0;
 extern char * ALIASPTR;
@@ -142,6 +152,30 @@ UCHAR NODECALL[7] = {0x9C, 0x9E, 0x88, 0x8A, 0xA6, 0x40, 0xE0};		// 'NODES' IN A
 extern BOOL LogAllConnects;
 
 APPLCALLS * APPL;
+
+
+void SendL2ToMonMap(struct PORTCONTROL * PORT, char * ReportCall, char Mode, char Direction)
+{
+	// if Port Freq < 30Mhz send to Node Map
+
+	if (PORT->PortFreq && PORT->PortFreq < 30000000)
+	{
+		char ReportMode[16];
+		char ReportFreq[350] = "";
+
+		ReportMode[0] = '@';
+		ReportMode[1] = Mode;
+		ReportMode[2] = '?';
+		ReportMode[3] = Direction;
+		ReportMode[4] = 0;
+
+		// If no position see if we have an APRS posn
+
+		_gcvt(PORT->PortFreq, 9, ReportFreq);
+
+ 		SendMH(0, ReportCall, ReportFreq, 0, ReportMode);
+	}
+}
 
 VOID L2Routine(struct PORTCONTROL * PORT, PMESSAGE Buffer)
 {
@@ -154,6 +188,7 @@ VOID L2Routine(struct PORTCONTROL * PORT, PMESSAGE Buffer)
 	UCHAR CTL;
 	uintptr_t Work;
 	UCHAR c;
+	unsigned int APPLMASK = 0;
 
 	//	Check for invalid length (< 22 7Header + 7Addr + 7Addr + CTL
 
@@ -167,7 +202,6 @@ VOID L2Routine(struct PORTCONTROL * PORT, PMESSAGE Buffer)
  	PORT->L2FRAMES++;
 
 	ALIASMSG = 0;
-	APPLMASK = 0;
 	ISNETROMMSG = 0;
 
 	MSGFLAG = 0;					// CMD/RESP UNDEFINED
@@ -238,6 +272,7 @@ VOID L2Routine(struct PORTCONTROL * PORT, PMESSAGE Buffer)
 
 	if (PORT->PORTMHEARD)
 		MHPROC(PORT, Buffer);
+
 
 	/// TAJ added 07/12/2020 for 'all RX traffic as IfinOctects
 
@@ -466,6 +501,8 @@ FORUS:
 
 	if (PORT->UIHook && CTL == 3)
 		PORT->UIHook(LINK, PORT, Buffer, ADJBUFFER, CTL, MSGFLAG);
+
+	LINK->APPLMASK = APPLMASK;
 
 	L2FORUS(LINK, PORT, Buffer, ADJBUFFER, CTL, MSGFLAG);
 }
@@ -733,7 +770,7 @@ VOID L2FORUS(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE * Buff
 
 		NO_CTEXT = 1;
 		
-		if (ROUTE->NEIGHBOUR_FLAG == 1 && ROUTE->NEIGHBOUR_QUAL == 0)		// Locked, qual 0
+		if (ROUTE->NEIGHBOUR_FLAG && ROUTE->NEIGHBOUR_QUAL == 0)		// Locked, qual 0
 		{
 			ReleaseBuffer(Buffer);
 			return;
@@ -816,6 +853,7 @@ VOID ProcessXIDCommand(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESS
 
 		while (xidlen > 0)
 		{
+			unsigned char * typeptr = ptr;
 			Type = *ptr++;
 			Len = *ptr++;
 
@@ -863,6 +901,23 @@ VOID ProcessXIDCommand(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESS
 			case 8:				//RX Window
 
 				break;
+
+			case 16:
+
+				// Compression
+
+				if (L2Compress)
+				{
+					LINK->AllowCompress = 1;
+					// return as 17
+					*typeptr = 17;
+				}
+				else
+				{
+					ptr = &ADJBUFFER->PID;
+					ptr[3] -= 2;			// Length field - remove compress option
+					Buffer->LENGTH -=2;
+				}
 			}
 		}
 
@@ -873,6 +928,8 @@ VOID ProcessXIDCommand(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESS
 		LINK->L2TIME = PORT->PORTT1;
 
 		LINK->LINKPORT = PORT;
+
+		LINK->KILLTIMER = L2KILLTIME - 60*3;		// Time out after 60 secs if SABM not received
 
 		// save calls so we can match up SABM when it comes
 
@@ -936,7 +993,7 @@ VOID ProcessXIDCommand(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESS
 
 		// We need to save APPLMASK and ALIASPTR so following SABM connects to application
 
-		LINK->APPLMASK = APPLMASK;
+		// LINK->APPLMASK now set in L2FORUS
 		LINK->ALIASPTR = ALIASPTR;
 
 		PUT_ON_PORT_Q(PORT, Buffer);
@@ -973,6 +1030,7 @@ VOID L2LINKACTIVE(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE *
 	//	MESSAGE ON AN ACTIVE LINK 
 
 	int CTLlessPF = CTL & ~PFBIT;
+	unsigned char * ptr;
 	
 	PORT->L2FRAMESFORUS++;
 
@@ -1028,7 +1086,7 @@ VOID L2LINKACTIVE(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE *
 
 				LINK->L2STATE = 2;
 				LINK->Ver2point2 = FALSE;
-				LINK->L2TIMER = 1;		// USe retry to send SABM
+				LINK->L2TIMER = 1;		// Use retry to send SABM
 			}
 			else if (CTLlessPF == XID)
 			{
@@ -1036,7 +1094,49 @@ VOID L2LINKACTIVE(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE *
 
 				LINK->L2STATE = 2;
 				LINK->Ver2point2 = TRUE;// Must support 2.2 if responded to XID
-				LINK->L2TIMER = 1;		// USe retry to send SABM
+
+				// if Compress enabled set it
+
+				ptr = &ADJBUFFER->PID;
+
+				if (*ptr++ == 0x82 && *ptr++ == 0x80)
+				{
+					int Type;
+					int Len;
+					unsigned int value;
+					int xidlen = *(ptr++) << 8;	
+					xidlen += *ptr++;
+
+					// XID is set of Type, Len, Value n-tuples
+
+					while (xidlen > 0)
+					{
+						Type = *ptr++;
+						Len = *ptr++;
+
+						value = 0;
+						xidlen -= (Len + 2);
+
+						while (Len--)
+						{
+							value <<=8;
+							value += *ptr++;
+						}
+						switch(Type)
+						{
+						case 17:
+
+							// Compression
+
+							if (L2Compress)
+								LINK->AllowCompress = 1;
+
+						}
+					}
+
+				}
+
+				LINK->L2TIMER = 1;		// Use retry to send SABM
 			}
 
 			ReleaseBuffer(Buffer);
@@ -1063,7 +1163,7 @@ VOID L2LINKACTIVE(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE *
 
 		if (LINK->L2STATE == 1)			// Sent XID?
 		{
-			APPLMASK = LINK->APPLMASK;
+			LINK->APPLMASK;
 			ALIASPTR = LINK->ALIASPTR;
 
 			L2SABM(LINK, PORT, Buffer, ADJBUFFER, MSGFLAG);			// Process the SABM
@@ -1131,6 +1231,9 @@ VOID L2SABM(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE * Buffe
 		return;
 	}
 
+	toCall[ConvFromAX25(ADJBUFFER->DEST, toCall)] = 0;
+	fromCall[ConvFromAX25(ADJBUFFER->ORIGIN, fromCall)] = 0;
+
 	SETUPNEWL2SESSION(LINK, PORT, Buffer, MSGFLAG);
 
 	if (LINK->L2STATE != 5)			// Setup OK?
@@ -1143,13 +1246,9 @@ VOID L2SABM(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE * Buffe
 
 	seeifInterlockneeded(PORT);
 
-	toCall[ConvFromAX25(ADJBUFFER->DEST, toCall)] = 0;
-	fromCall[ConvFromAX25(ADJBUFFER->ORIGIN, fromCall)] = 0;
-
-
 	//	IF CONNECT TO APPL ADDRESS, SET UP APPL SESSION
 
-	if (APPLMASK == 0)
+	if (LINK->APPLMASK == 0)
 	{
 		//	Not ATTACH TO APPL
 	
@@ -1161,16 +1260,13 @@ VOID L2SABM(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE * Buffe
 		int Paclen= PORT->PORTPACLEN;
 		UCHAR * ptr;
 
-		if (LogAllConnects)
-		{		
-			char toCall[12], fromCall[12];
-			toCall[ConvFromAX25(ADJBUFFER->DEST, toCall)] = 0;
-			fromCall[ConvFromAX25(ADJBUFFER->ORIGIN, fromCall)] = 0;
+		if (LogAllConnects)	
 			WriteConnectLog(fromCall, toCall, "AX.25");
-		}
 
 		hookL2SessionAccepted(PORT->PORTNUMBER, fromCall, toCall, LINK);
-		
+
+		SendL2ToMonMap(PORT, fromCall, '+', 'I');		
+	
 		L2SENDUA(PORT, Buffer, ADJBUFFER);
 
 		if (PORT->TNC && PORT->TNC->Hardware == H_KISSHF)
@@ -1284,6 +1380,10 @@ VOID L2SABM(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE * Buffe
 		//	ACCEPT THE CONNECT, THEN INVOKE THE ALIAS
 
 		L2SENDUA(PORT, Buffer, ADJBUFFER);
+
+		hookL2SessionAccepted(PORT->PORTNUMBER, fromCall, toCall, LINK);
+
+		SendL2ToMonMap(PORT, fromCall, '+', 'I');		
 	
 		if (PORT->TNC && PORT->TNC->Hardware == H_KISSHF)
 		{
@@ -1358,7 +1458,7 @@ VOID L2SABM(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE * Buffe
 		return;
 	}
 
-	if (cATTACHTOBBS(Session, APPLMASK, PORT->PORTPACLEN, &CONERROR) == 0)
+	if (cATTACHTOBBS(Session, LINK->APPLMASK, PORT->PORTPACLEN, &CONERROR) == 0)
 	{
 		//	NO BBS AVAILABLE
 	
@@ -1383,6 +1483,10 @@ VOID L2SABM(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE * Buffe
 
 	L2SENDUA(PORT, Buffer, ADJBUFFER);
 
+	hookL2SessionAccepted(PORT->PORTNUMBER, fromCall, toCall, LINK);
+
+	SendL2ToMonMap(PORT, fromCall, '+', 'I');		
+	
 	if (PORT->TNC && PORT->TNC->Hardware == H_KISSHF)
 	{
 		struct DATAMESSAGE * Msg;
@@ -1691,9 +1795,9 @@ BOOL InternalL2SETUPCROSSLINK(PROUTE ROUTE, int Retries)
 	else
 		LINK->LINKWINDOW = PORT->PORTWINDOW;
 
-//	if (SUPPORT2point2)
-//		LINK->L2STATE = 1;		// Send XID
-//	else
+	if (SUPPORT2point2)
+		LINK->L2STATE = 1;		// Send XID
+	else
 		LINK->L2STATE = 2;
 
 	memcpy(LINK->LINKCALL, ROUTE->NEIGHBOUR_CALL, 7);
@@ -1850,8 +1954,14 @@ VOID L2_PROCESS(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE * B
 		{
 			//	RESPONSE TO SABM - SET LINK  UP
 
+			char fromCall[12];
+
+			fromCall[ConvFromAX25(Buffer->ORIGIN, fromCall)] = 0;
+
 			RESET2X(LINK);			// LEAVE QUEUED STUFF
 
+			SendL2ToMonMap(PORT, fromCall, '+', 'O');		
+	
 			LINK->L2STATE = 5;
 			LINK->L2TIMER = 0;		// CANCEL TIMER
 			LINK->L2RETRIES = 0;
@@ -1982,7 +2092,6 @@ VOID SDUFRM(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE * Buffe
 		SDFRMR(LINK, PORT);		// PROCESS FRAME REJECT CONDITION
 
 	}
-
 	ReleaseBuffer(Buffer);
 }
 	
@@ -2322,12 +2431,11 @@ CheckNSLoop:
 		{
 			// Already have a copy, so discard old and keep this
 			
-			Debugprintf ("Frame %d out of seq but already have copy - release it", NS);
 			ReleaseBuffer(Q_REM(&LINK->RXFRAMES[NS]));
 		}
 		else
 		{
-			Debugprintf ("Frame %d out of seq - save", NS);
+//			Debugprintf ("Frame %d out of seq - save", NS);
 		}
 
 		Buffer->CHAIN = 0;
@@ -2414,6 +2522,8 @@ CheckPF:
 
 }
 
+int doinflate(unsigned char * source, unsigned char * dest, int Len, int destlen, int * outLen);
+
 
 VOID PROC_I_FRAME(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE * Buffer)
 {
@@ -2442,6 +2552,9 @@ VOID PROC_I_FRAME(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE *
 	Length = Buffer->LENGTH - (MSGHDDRLEN + 15);	// Buffer Header + addrs + CTL
 	Info  = &Buffer->PID;
 
+	LINK->bytesRXed += Length;
+	LINK->Received += Length - 1;	// Exclude PID
+
 	// Adjust for DIGIS
 
 	EOA = &Buffer->ORIGIN[6];		// End of address Bit
@@ -2457,6 +2570,111 @@ VOID PROC_I_FRAME(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE *
 
 	switch(PID)
 	{
+	case 0xf2:
+
+		// Intermediate fragment of compressed. Save
+
+		// Length and Info include  pid 
+
+		Length--;
+		Info++;
+		
+		if (LINK->unCompress == 0)
+			LINK->unCompress = malloc(8192);
+		
+		// Save data
+			
+		memcpy(&LINK->unCompress[LINK->unCompressLen], Info, Length);
+		LINK->unCompressLen += Length;
+
+		ReleaseBuffer(Buffer);
+
+		LINK->L2ACKREQ = PORT->PORTT2;			// SET RR NEEDED
+		LINK->KILLTIMER = 0;					// RESET IDLE LINK TIMER
+		return;
+
+
+	case 0xf1:
+
+		// Compressed last or only
+
+		{
+			char exBuffer[8192];
+			int Len;
+			int outLen;
+			int sendLen;
+			char * sendptr = exBuffer;
+
+			Length--;
+			Info++;
+		
+			// we may have previous fragments
+
+			if (LINK->unCompressLen)
+			{
+				memcpy(&LINK->unCompress[LINK->unCompressLen], Info, Length);
+				LINK->unCompressLen += Length;
+				Len = doinflate(LINK->unCompress, exBuffer, LINK->unCompressLen, 8192, &outLen);
+				LINK->ReceivedAfterExpansion += outLen - 1;
+
+				LINK->unCompressLen = 0;
+			}
+			else	
+			{
+				Len = doinflate(Info, exBuffer, Length, 8192, &outLen);
+				LINK->ReceivedAfterExpansion += outLen - 1;
+			}
+			sendLen = outLen;
+
+			// Send first bit in input buffer. If still some left get new buffers for it
+
+			if (sendLen > 257)
+				sendLen = 257;
+
+			// First byte is original PID
+
+			memcpy(&Msg->PID, exBuffer, sendLen);
+			Msg->LENGTH = sendLen + MSGHDDRLEN;
+ 
+			C_Q_ADD(&LINK->RX_Q, Msg);
+
+			outLen -= sendLen;
+			sendptr += sendLen;
+
+			while (outLen > 0)
+			{
+				sendLen = outLen;
+
+				if (sendLen > 236)
+					sendLen = 236;
+
+				Msg = GetBuff();
+
+				if (Msg)
+				{
+					// Just ignore if no buffers - shouldn't happen
+
+					Msg->PID = exBuffer[0];
+					Msg->PORT = LINK->LINKPORT->PORTNUMBER;
+
+					memcpy(Msg->L2DATA, sendptr, sendLen);
+					Length = sendLen + 1;
+		
+					Msg->LENGTH = Length + MSGHDDRLEN;
+					C_Q_ADD(&LINK->RX_Q, Msg);
+				}
+
+				outLen -= sendLen;
+				sendptr += sendLen;
+			}
+		
+			LINK->L2ACKREQ = PORT->PORTT2;			// SET RR NEEDED
+			LINK->KILLTIMER = 0;					// RESET IDLE LINK TIMER
+
+			return;
+		}
+
+
 	case 0xcc:
 	case 0xcd:
 		
@@ -2506,6 +2724,7 @@ VOID PROC_I_FRAME(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT, MESSAGE *
 		// Copy Data back over
 
 		memmove(&Msg->PID, Info, Length);
+		LINK->ReceivedAfterExpansion += Length - 1;
 
 		Buffer->LENGTH = Length + MSGHDDRLEN;
  
@@ -2647,6 +2866,13 @@ VOID RESET2(struct _LINKTABLE * LINK)
 
 VOID SENDSABM(struct _LINKTABLE * LINK)
 {
+	char toCall[10];
+	char fromCall[10];
+
+	toCall[ConvFromAX25(LINK->LINKCALL, toCall)] = 0;
+	fromCall[ConvFromAX25(LINK->OURCALL, fromCall)] = 0;
+	hookL2SessionAttempt(LINK->LINKPORT->PORTNUMBER, fromCall, toCall, LINK);
+
 	L2SENDCOMMAND(LINK, SABM | PFBIT);
 }
 
@@ -2713,7 +2939,7 @@ VOID SDETX(struct _LINKTABLE * LINK)
 	UCHAR * ptr1, * ptr2;
 	UCHAR CTL;
 	int count;
-	MESSAGE * Msg;
+	struct DATAMESSAGE * Msg;
 	MESSAGE * Buffer;
 
 	//	DONT SEND IF RESEQUENCING RECEIVED FRAMES - CAN CAUSE FRMR PROBLEMS
@@ -2721,11 +2947,6 @@ VOID SDETX(struct _LINKTABLE * LINK)
 //	if (LINK->L2RESEQ_Q)
 //		return;
 	
-	if (LINK->LINKPORT->PORTNUMBER == 19)
-	{
-		int i = 0;
-	}
-
 	Outstanding = LINK->LINKNS - LINK->LINKOWS;			// Was WS not NS
 
 	if (Outstanding < 0)
@@ -2738,13 +2959,150 @@ VOID SDETX(struct _LINKTABLE * LINK)
 
 	while (LINK->TX_Q && LINK->FRAMES[LINK->SDTSLOT] == NULL)
 	{
+		// Try compressing here. Only Compress PID 0xF0 frames - NETROM doesn't treat L2 session as a byte stream
+
 		Msg = Q_REM(&LINK->TX_Q);
 		Msg->CHAIN = NULL;
-		LINK->FRAMES[LINK->SDTSLOT] = Msg;
-		LINK->SDTSLOT ++;
-		LINK->SDTSLOT &= 7;
-	}
+
+		if (LINK->AllowCompress && Msg->LENGTH > 20  && LINK->TX_Q && Msg->PID == 240)			// if short and no more not worth trying compression
+		{
+			int complen = 0;
+			int dataLen;
+			int savePort = Msg->PORT;
+			int savePID = Msg->PID;
+			unsigned char Compressed[8192];
+			unsigned char toCompress[8192];
+			int toCompressLen = 0;
+
+			int slots = 0;
+			int n = LINK->SDTSLOT;	
+			int maxcompsize;
+			int PACLEN = LINK->LINKPORT->PORTPACLEN;
+			unsigned char * compdata;
+			int sendLen = complen;
+			int uncompressed = 0;
+
+			if (PACLEN == 0)
+				PACLEN = 256;
+
+			// I think I need to know how many slots are available, so I don't compress too much
+			// Then collect data, compressing after each frame to make sure will fit in available space
+
+			while (LINK->FRAMES[n] == NULL && slots < 8)
+			{
+				slots++;
+				n++;
+				n &= 7;
+			}
+
+			maxcompsize = slots * PACLEN;
+
+			// Save first packet, then see if more on TX_Q
+			
+			toCompressLen = 0;
+
+			dataLen = Msg->LENGTH - MSGHDDRLEN;
+
+			LINK->Sent += dataLen;
+
+			memcpy(&toCompress[toCompressLen], &Msg->PID, dataLen);
+			toCompressLen += dataLen;
+
+			complen = L2Compressit(Compressed, 8192, toCompress, toCompressLen);
+
+			ReleaseBuffer(Msg);
+
+			while (LINK->TX_Q)					
+			{
+				Msg = LINK->TX_Q;							// Leave on queue until sure it will fit
+				dataLen = Msg->LENGTH - MSGHDDRLEN -1;		// PID only on 1st fragment
+
+				memcpy(&toCompress[toCompressLen], &Msg->L2DATA, dataLen);
+				toCompressLen += dataLen;
+
+				// Need to make sure we don't go over maxcompsize
+				
+				complen = L2Compressit(Compressed, 8192, toCompress, toCompressLen);
+
+				if (complen > maxcompsize)
+				{
+					// Remove last fragment and compress again
+
+					toCompressLen -= dataLen;
+					complen = L2Compressit(Compressed, 8192, toCompress, toCompressLen);
+					break;
+				}
+				else
+				{
+					LINK->Sent += dataLen;
+					Msg = Q_REM(&LINK->TX_Q);
+					Msg->CHAIN = NULL;
+
+					ReleaseBuffer(Msg);
+				}
+			}
+
+			if (complen >= toCompressLen)
+			{
+				// Won't compress, so just send original data
+				// May still need to fragment
+
+				memcpy(Compressed, toCompress, toCompressLen);
+				complen = toCompressLen - 1;		// Remove leading PID
+				uncompressed = 1;
+				compdata = &Compressed[1];
+			}
+			else
+				compdata = Compressed;
+
+			// We now need to packetize and add to FRAMES 
+
+			LINK->SentAfterCompression += complen;
+
+			sendLen = PACLEN;
 	
+			while (complen > 0)
+			{
+				int PID = 0xF1;
+
+				if (complen > sendLen)
+					PID = 0xF2;				// More to come
+				else
+					sendLen = complen;
+
+				if (uncompressed)
+					PID = Compressed[0];
+
+				Msg = GetBuff();
+
+				if (!Msg)
+					return;
+
+				Msg->PORT = savePort;
+				Msg->PID = PID;
+
+				memcpy(&Msg->L2DATA, compdata, sendLen);
+				Msg->LENGTH =  sendLen + MSGHDDRLEN + 1;
+
+				LINK->FRAMES[LINK->SDTSLOT] = Msg;
+				LINK->SDTSLOT ++;
+				LINK->SDTSLOT &= 7;
+				
+				compdata += sendLen;
+				complen -= sendLen;
+			}
+
+			toCompressLen = 0;
+
+		}
+		else
+		{
+			LINK->FRAMES[LINK->SDTSLOT] = Msg;
+			LINK->SDTSLOT ++;
+			LINK->SDTSLOT &= 7;
+		}
+	}
+
 	// dont send while poll outstanding
 
 	while ((LINK->L2FLAGS & POLLSENT) == 0)
@@ -2955,13 +3313,25 @@ VOID L2TimerProc()
 		{
 			// CIRCUIT HAS BEEN IDLE TOO LONG - SHUT IT DOWN
 
-			LINK->KILLTIMER = 0;
-			LINK->L2TIMER = 1;		// TO FORCE DISC
-			LINK->L2STATE = 4;		// DISCONNECTING
+			// if in XID received state session was never established so don't send DISC
 
-			//	TELL OTHER LEVELS
+			if (LINK->L2STATE == 1)
+			{
+				if (PORT->TNC && PORT->TNC->Hardware == H_KISSHF)
+					DetachKISSHF(PORT);
 
-			InformPartner(LINK, NORMALCLOSE);
+				CLEAROUTLINK(LINK);
+			}
+			else
+			{
+				LINK->KILLTIMER = 0;
+				LINK->L2TIMER = 1;		// TO FORCE DISC
+				LINK->L2STATE = 4;		// DISCONNECTING
+
+				//	TELL OTHER LEVELS
+
+				InformPartner(LINK, NORMALCLOSE);
+			}
 		}
 		LINK++;
 	}
@@ -3090,7 +3460,7 @@ VOID ACKMSG(struct _LINKTABLE * LINK)
 	}
 }
 
-VOID CONNECTFAILED();
+VOID CONNECTFAILED(struct _LINKTABLE * LINK);
 	
 VOID L2TIMEOUT(struct _LINKTABLE * LINK, struct PORTCONTROL * PORT)
 {
@@ -3260,16 +3630,14 @@ VOID SENDFRMR(struct _LINKTABLE * LINK)
 
 VOID CLEAROUTLINK(struct _LINKTABLE * LINK)
 {
-	char toCall[12], fromCall[12];
-
-	toCall[ConvFromAX25(LINK->LINKCALL, toCall)] = 0;
-	fromCall[ConvFromAX25(LINK->OURCALL, fromCall)] = 0;
-
-	hookL2SessionDeleted(LINK->LINKPORT->PORTNUMBER, fromCall, toCall, LINK);
+	hookL2SessionDeleted(LINK);
 
 	seeifUnlockneeded(LINK);
 
 	CLEARL2QUEUES(LINK);				// TO RELEASE ANY BUFFERS
+
+	if (LINK->unCompress)
+		free(LINK->unCompress);
 
 	memset(LINK, 0, sizeof(struct _LINKTABLE));
 }
@@ -3305,7 +3673,11 @@ VOID L2SENDXID(struct _LINKTABLE * LINK)
 	*ptr++ = 0x82;			// FI
 	*ptr++ = 0x80;			// GI
 	*ptr++ = 0x0;
-	*ptr++ = 0x10;			// Length 16
+
+	if (L2Compress)
+		*ptr++ = 0x12;			// Length 18
+	else
+		*ptr++ = 0x10;			// Length 16
 
 	*ptr++ = 0x02;			// Classes of Procedures
 	*ptr++ = 0x02;			// Length
@@ -3334,6 +3706,14 @@ VOID L2SENDXID(struct _LINKTABLE * LINK)
 	*ptr++ = 0x08;			// RX Window
 	*ptr++ = 0x01;			// Len
 	*ptr++ = 0x07;			// 7
+
+	// if L2Compress Enabled request it
+
+	if (L2Compress)
+	{
+		*ptr++ = 0x10;			// Compress
+		*ptr++ = 0x00;			// Len
+	}
 
 	Buffer->LENGTH = (int)(ptr - (UCHAR *)Buffer);		// SET LENGTH
 
@@ -3538,7 +3918,6 @@ CheckNSLoop2:
 			struct PORTCONTROL * PORT = LINK->LINKPORT;
 			MESSAGE * OldBuffer = Q_REM(&LINK->RXFRAMES[LINK->LINKNR]);
 		
-			Debugprintf("L2 about to send REJ - process saved Frame %d", LINK->LINKNR);
 			PROC_I_FRAME(LINK, PORT, OldBuffer); // Passes on  or releases Buffer
 
 			// NR has been updated.
@@ -3596,7 +3975,7 @@ VOID CONNECTREFUSED(struct _LINKTABLE * LINK)
 	ConnectFailedOrRefused(LINK, "Busy from");
 }
 
-VOID L3CONNECTFAILED();
+VOID L3CONNECTFAILED(struct _LINKTABLE * LINK);
 
 VOID ConnectFailedOrRefused(struct _LINKTABLE * LINK, char * Msg)
 {
@@ -4132,10 +4511,37 @@ int seeifUnlockneeded(struct _LINKTABLE * LINK)
 		if (TNC)
 			if (Interlock == TNC->RXRadio || Interlock == TNC->TXRadio)	// Same Group	
 				if (TNC->ReleasePortProc &&	TNC->PortRecord->PORTCONTROL.PortSuspended == TRUE)
-					TNC->ReleasePortProc(TNC, TNC);
+					TNC->ReleasePortProc(TNC);
 	}
 
 	return 0;
+}
+
+int L2Compressit(unsigned char * Out, int OutSize, unsigned char * In, int Len)
+{
+	z_stream defstream;
+	int maxSize;
+
+	defstream.zalloc = Z_NULL;
+	defstream.zfree = Z_NULL;
+	defstream.opaque = Z_NULL;
+
+	defstream.avail_in = Len; // size of input
+	defstream.next_in = (Bytef *)In; // input char array
+
+	deflateInit(&defstream, Z_BEST_COMPRESSION);
+	maxSize = deflateBound(&defstream, Len);
+
+	if (maxSize > OutSize)
+		return 0;
+
+	defstream.avail_out = maxSize; // size of output
+	defstream.next_out = (Bytef *)Out; // output char array
+
+	deflate(&defstream, Z_FINISH);
+	deflateEnd(&defstream);
+
+	return defstream.total_out;
 }
 
 

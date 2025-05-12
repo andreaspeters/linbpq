@@ -33,6 +33,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 char * strlop(char * buf, char delim);
 
+
 VOID APIENTRY md5 (char *arg, unsigned char * checksum);
 
 // Implementation of the WinLink password challenge/response protocol

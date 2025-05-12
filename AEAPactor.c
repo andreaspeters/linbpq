@@ -45,7 +45,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 //#include <process.h>
 //#include <time.h>
 
-#include "CHeaders.h"
+#include "cheaders.h"
 #include "tncinfo.h"
 
 #include "bpq32.h"
@@ -292,8 +292,7 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 		{
 			// Send Error Response
 
-			buffptr->Len = 36;
-			memcpy(buffptr->Data, "No Connection to PACTOR TNC\r", 36);
+			buffptr->Len = sprintf(buffptr->Data, "No Connection to PACTOR TNC\r");
 
 			C_Q_ADD(&TNC->Streams[Stream].PACTORtoBPQ_Q, buffptr);
 			
@@ -383,15 +382,14 @@ VOID * AEAExtInit(EXTPORTDATA *  PortEntry)
 
 	TNC->Port = port;
 
-	TNC->Hardware = H_AEA;
+	TNC->PortRecord = PortEntry;
+	TNC->PortRecord->PORTCONTROL.HWType = TNC->Hardware = H_AEA;
 
 	TNC->TEXTMODE = FALSE;
 
 	PortEntry->MAXHOSTMODESESSIONS = 11;		// Default
 
 	TNC->InitScript = _strupr(TNC->InitScript);
-
-	TNC->PortRecord = PortEntry;
 
 	if (PortEntry->PORTCONTROL.PORTCALL[0] == 0)
 	{
@@ -812,7 +810,7 @@ VOID AEAPoll(int Port)
 				{
 					// Limit amount in TX
 
-					if (TNC->Streams[0].BytesTXed - TNC->Streams[0].BytesAcked > 200)
+					if (TNC->Streams[0].bytesTXed - TNC->Streams[0].BytesAcked > 200)
 						continue;
 
 					// If in IRS state for too long, force turnround
@@ -877,8 +875,8 @@ VOID AEAPoll(int Port)
 				
 				EncodeAndSend(TNC, TXMsg, datalen + 1);
 				ReleaseBuffer(buffptr);
-				TNC->Streams[Stream].BytesTXed += datalen; 
-				Debugprintf("Stream %d Sending %d, BytesTXED now %d", Stream, datalen, TNC->Streams[Stream].BytesTXed);
+				TNC->Streams[Stream].bytesTXed += datalen; 
+				Debugprintf("Stream %d Sending %d, BytesTXED now %d", Stream, datalen, TNC->Streams[Stream].bytesTXed);
 				TNC->Timeout = 0;
 				TNC->DataBusy = TRUE;
 
@@ -1212,7 +1210,7 @@ static VOID ProcessAEAPacket(struct TNCINFO * TNC, UCHAR * Msg, size_t Len)
 		// If nothing more to send, turn round link
 						
 		if ((TNC->Streams[0].BPQtoPACTOR_Q == 0) && TNC->NeedTurnRound &&
-			(TNC->Streams[0].BytesAcked >= TNC->Streams[0].BytesTXed))		// Nothing following and all acked
+			(TNC->Streams[0].BytesAcked >= TNC->Streams[0].bytesTXed))		// Nothing following and all acked
 			{
 				Debugprintf("AEA Sent = Acked - sending Turnround");
 						
@@ -1247,7 +1245,7 @@ static VOID ProcessAEAPacket(struct TNCINFO * TNC, UCHAR * Msg, size_t Len)
 		Len--;							// Remove Header
 
 		buffptr->Len = Len;				// Length
-		TNC->Streams[Stream].BytesRXed += (int)Len;
+		TNC->Streams[Stream].bytesRXed += (int)Len;
 		memcpy(&buffptr->Data[0], Buffer, Len);
 		C_Q_ADD(&TNC->Streams[Stream].PACTORtoBPQ_Q, buffptr);
 
@@ -1418,7 +1416,7 @@ static VOID ProcessAEAPacket(struct TNCINFO * TNC, UCHAR * Msg, size_t Len)
 				Buffer[Len-2] = 0;
 			}
 
-			TNC->Streams[Stream].BytesRXed = TNC->Streams[Stream].BytesTXed = TNC->Streams[Stream].BytesAcked = 0;
+			TNC->Streams[Stream].bytesRXed = TNC->Streams[Stream].bytesTXed = TNC->Streams[Stream].BytesAcked = 0;
 			TNC->Streams[Stream].ConnectTime = time(NULL); 
 
 			if (Stream == 0)

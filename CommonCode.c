@@ -18,7 +18,6 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 */	
 
 
-
 // General C Routines common to bpq32 and linbpq. Mainly moved from BPQ32.c
 
 #pragma data_seg("_BPQDATA")
@@ -28,10 +27,11 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "mqtt.h"
 
 #pragma data_seg("_BPQDATA")
 
-#include "CHeaders.h"
+#include "cheaders.h"
 #include "tncinfo.h"
 #include "configstructs.h"
 
@@ -68,7 +68,7 @@ VOID WriteMiniDump();
 void printStack(void);
 char * FormatMH(PMHSTRUC MH, char Format);
 void WriteConnectLog(char * fromCall, char * toCall, UCHAR * Mode);
-void SendDataToPktMap(char *Msg);
+void SendDataToPktMap();
 
 extern BOOL LogAllConnects;
 extern BOOL M0LTEMap;
@@ -691,7 +691,7 @@ VOID DISPLAYCIRCUIT(TRANSPORTENTRY * L4, char * Buffer)
 }
 
 VOID CheckForDetach(struct TNCINFO * TNC, int Stream, struct STREAMINFO * STREAM,
-			VOID TidyCloseProc(), VOID ForcedCloseProc(), VOID CloseComplete())
+			VOID TidyCloseProc(struct TNCINFO * TNC, int Stream), VOID ForcedCloseProc(struct TNCINFO * TNC, int Stream), VOID CloseComplete(struct TNCINFO * TNC, int Stream))
 {
 	void ** buffptr;
 
@@ -721,8 +721,6 @@ VOID CheckForDetach(struct TNCINFO * TNC, int Stream, struct STREAMINFO * STREAM
 
 		if (STREAM->Connected || STREAM->Connecting)
 		{
-			char logmsg[120];
-			time_t Duration;
 
 			// Need to do a tidy close
 
@@ -735,22 +733,7 @@ VOID CheckForDetach(struct TNCINFO * TNC, int Stream, struct STREAMINFO * STREAM
 
 			// Create a traffic record
 
-			if (STREAM->Connected && STREAM->ConnectTime)
-			{
-				Duration = time(NULL) - STREAM->ConnectTime;
-
-				if (Duration == 0)
-					Duration = 1;				// Or will get divide by zero error 
-
-				sprintf(logmsg,"Port %2d %9s Bytes Sent %d  BPS %d Bytes Received %d BPS %d Time %d Seconds",
-					TNC->Port, STREAM->RemoteCall,
-					STREAM->BytesTXed, (int)(STREAM->BytesTXed/Duration),
-					STREAM->BytesRXed, (int)(STREAM->BytesRXed/Duration), (int)Duration);
-
-				Debugprintf(logmsg);
-
-				STREAM->ConnectTime = 0;
-			}
+			hookL4SessionDeleted(TNC, STREAM);
 
 			if (STREAM->BPQtoPACTOR_Q)					// Still data to send?
 				return;									// Will close when all acked
@@ -920,6 +903,7 @@ BOOL ProcessIncommingConnectEx(struct TNCINFO * TNC, char * Call, int Stream, BO
 	int Totallen = 0;
 	UCHAR * ptr;
 	struct PORTCONTROL * PORT = (struct PORTCONTROL *)TNC->PortRecord;
+	struct STREAMINFO * STREAM = &TNC->Streams[Stream];
 	
 	// Stop Scanner
 
@@ -929,7 +913,7 @@ BOOL ProcessIncommingConnectEx(struct TNCINFO * TNC, char * Call, int Stream, BO
 
 		sprintf(Msg, "%d SCANSTOP", TNC->Port);
 
-		Rig_Command( (TRANSPORTENTRY *) -1, Msg);
+		Rig_Command((TRANSPORTENTRY *) -1, Msg);
 
 		UpdateMH(TNC, Call, '+', 'I');
 	}
@@ -952,7 +936,11 @@ BOOL ProcessIncommingConnectEx(struct TNCINFO * TNC, char * Call, int Stream, BO
 
 	memset(Session, 0, sizeof(TRANSPORTENTRY));
 
-	memcpy(TNC->Streams[Stream].RemoteCall, Call, 9);	// Save Text Callsign
+	memcpy(STREAM->RemoteCall, Call, 9);	// Save Text Callsign
+
+	// May be subsequently rejected but a good place to capture calls
+
+	hookL4SessionAccepted(STREAM, Call, TNC->TargetCall);
 
 	if (AllowTR)
 		ConvToAX25Ex(Call, Session->L4USER);				// Allow -T and -R SSID's for MPS
@@ -965,7 +953,7 @@ BOOL ProcessIncommingConnectEx(struct TNCINFO * TNC, char * Call, int Stream, BO
 	if (NEXTID == 0) NEXTID++;		// Keep non-zero
 
 	TNC->PortRecord->ATTACHEDSESSIONS[Stream] = Session;
-	TNC->Streams[Stream].Attached = TRUE;
+	STREAM->Attached = TRUE;
 
 	Session->L4TARGET.EXTPORT = TNC->PortRecord;
 
@@ -976,7 +964,7 @@ BOOL ProcessIncommingConnectEx(struct TNCINFO * TNC, char * Call, int Stream, BO
 	Session->SESSPACLEN = TNC->PortRecord->PORTCONTROL.PORTPACLEN;
 	Session->KAMSESSION = Stream;
 
-	TNC->Streams[Stream].Connected = TRUE;			// Subsequent data to data channel
+	STREAM->Connected = TRUE;			// Subsequent data to data channel
 
 	if (LogAllConnects)
 	{
@@ -1029,7 +1017,7 @@ BOOL ProcessIncommingConnectEx(struct TNCINFO * TNC, char * Call, int Stream, BO
 char * Config;
 static char * ptr1, * ptr2;
 
-BOOL ReadConfigFile(int Port, int ProcLine())
+BOOL ReadConfigFile(int Port, int ProcLine(char * buf, int Port))
 {
 	char buf[256],errbuf[256];
 
@@ -1073,6 +1061,7 @@ BOOL ReadConfigFile(int Port, int ProcLine())
 				WritetoConsoleLocal("\n");
 				WritetoConsoleLocal("Bad config record ");
 				WritetoConsoleLocal(errbuf);
+				WritetoConsoleLocal("\n");
 			}
 		}
 	}
@@ -1134,6 +1123,11 @@ int CompareAlias(struct DEST_LIST ** a, struct DEST_LIST ** b)
 int CompareNode(struct DEST_LIST ** a, struct DEST_LIST ** b)
 {
 	return memcmp(a[0]->DEST_CALL, b[0]->DEST_CALL, 7);
+}
+
+int CompareRoutes(struct ROUTE ** a, struct ROUTE ** b)
+{
+	return memcmp(a[0]->NEIGHBOUR_CALL, b[0]->NEIGHBOUR_CALL, 7);
 }
 
 DllExport int APIENTRY CountFramesQueuedOnStream(int Stream)
@@ -1467,7 +1461,21 @@ DllExport int APIENTRY SessionStateNoAck(int stream, int * state)
 	return 0;
 }
 
+
+int SendMsgEx(int stream, char * msg, int len, int GetSem);
+
+int SendMsgNoSem(int stream, char * msg, int len)
+{
+	return SendMsgEx(stream, msg, len, 0);
+}
+
 DllExport int APIENTRY SendMsg(int stream, char * msg, int len)
+{
+	return SendMsgEx(stream, msg, len, 1);
+}
+
+
+int SendMsgEx(int stream, char * msg, int len, int GetSem)
 {
 	//	Send message to stream (BPQHOST Function 2)
 
@@ -1490,11 +1498,13 @@ DllExport int APIENTRY SendMsg(int stream, char * msg, int len)
 		if (QCOUNT < 50)
 			return 0;					// Dont want to run out
 
-		GetSemaphore(&Semaphore, 10);
+		if (GetSem)
+			GetSemaphore(&Semaphore, 10);
 
 		if ((MSG = GetBuff()) == 0)
 		{
-			FreeSemaphore(&Semaphore);
+			if (GetSem)
+				FreeSemaphore(&Semaphore);
 			return 0;
 		}
 
@@ -1505,7 +1515,8 @@ DllExport int APIENTRY SendMsg(int stream, char * msg, int len)
 
 		SENDUIMESSAGE(MSG);
 		ReleaseBuffer(MSG);
-		FreeSemaphore(&Semaphore);
+		if (GetSem)
+			FreeSemaphore(&Semaphore);
 		return 0;
 	}
 
@@ -1520,13 +1531,15 @@ DllExport int APIENTRY SendMsg(int stream, char * msg, int len)
 	if (L4 == 0)
 		return 0;
 
-	GetSemaphore(&Semaphore, 22);
+	if (GetSem)
+		GetSemaphore(&Semaphore, 22);
 
 	SESS->HOSTFLAGS |= 0x80;		// SET ALLOCATED BIT
 
 	if (QCOUNT < 40)				// PLENTY FREE?
 	{
-		FreeSemaphore(&Semaphore);
+		if (GetSem)
+			FreeSemaphore(&Semaphore);
 		return 1;
 	}
 
@@ -1539,14 +1552,16 @@ DllExport int APIENTRY SendMsg(int stream, char * msg, int len)
 		if (n > 100)
 		{
 			Debugprintf("Stream %d QCOUNT %d Q Len %d - discarding", stream, QCOUNT, n);
-			FreeSemaphore(&Semaphore);
+			if (GetSem)
+				FreeSemaphore(&Semaphore);
 			return 1;
 		}
 	}
 
 	if ((MSG = GetBuff()) == 0)
 	{
-		FreeSemaphore(&Semaphore);
+		if (GetSem)
+			FreeSemaphore(&Semaphore);
 		return 1;
 	}
 
@@ -1573,7 +1588,8 @@ DllExport int APIENTRY SendMsg(int stream, char * msg, int len)
 	else
 		C_Q_ADD(&L4->L4RX_Q, MSG);
 
-	FreeSemaphore(&Semaphore);
+	if (GetSem)
+		FreeSemaphore(&Semaphore);
 	return 0;
 }
 DllExport int APIENTRY SendRaw(int port, char * msg, int len)
@@ -1612,9 +1628,9 @@ DllExport int APIENTRY SendRaw(int port, char * msg, int len)
 
 	MSG->LENGTH = len + MSGHDDRLEN;
 
-	if (PORT->PROTOCOL == 10)		 // PACTOR/WINMOR Style
+	if (PORT->PROTOCOL == 10 && PORT->HWType != H_KISSHF)		 // PACTOR/WINMOR Style
 	{
-		//	Pactor Style. Probably will only be used for Tracker uneless we do APRS over V4 or WINMOR
+		//	Pactor Style. Probably will only be used for Tracker unless we do APRS over V4 or WINMOR
 
 		EXTPORTDATA * EXTPORT = (EXTPORTDATA *) PORT;
 
@@ -2446,7 +2462,7 @@ static struct speed_struct
 HANDLE OpenCOMPort(VOID * pPort, int speed, BOOL SetDTR, BOOL SetRTS, BOOL Quiet, int Stopbits)
 {
 	char Port[256];
-	char buf[100];
+	char buf[512];
 
 	//	Linux Version.
 
@@ -2676,6 +2692,14 @@ int DoRoutes()
 	{
 		if (Routes->NEIGHBOUR_CALL[0] != 0)
 		{
+			// Dont save routes from config file here or they are difficult to get rid of
+
+			if (Routes->NEIGHBOUR_FLAG & LOCKEDBYCONFIG)
+			{
+				Routes++;
+				continue;
+			}
+
 			len=ConvFromAX25(Routes->NEIGHBOUR_CALL,Normcall);
 			Normcall[len]=0;
 
@@ -2699,7 +2723,7 @@ int DoRoutes()
 				digis[0] = 0;
 
 			len=sprintf(line,
-					"ROUTE ADD %s %d %d %s %d %d %d %d %d\n",
+					"ROUTE ADD %s %d %d %s %d %d %d %d %d %c\n",
 					Normcall,
 					Routes->NEIGHBOUR_PORT,
 					Routes->NEIGHBOUR_QUAL, digis,
@@ -2707,7 +2731,8 @@ int DoRoutes()
 					Routes->NBOUR_FRACK,
 					Routes->NBOUR_PACLEN,
 					Routes->INP3Node | (Routes->NoKeepAlive << 2),
-					Routes->OtherendsRouteQual);
+					Routes->OtherendsRouteQual,
+					(Routes->NEIGHBOUR_FLAG & LOCKEDBYSYSOP)?'!':' ');
 
 					fputs(line, file);
 		}
@@ -3018,19 +3043,7 @@ DllExport int APIENTRY ClearNodes ()
 
 	return (0);
 }
-char * FormatUptime(int Uptime)
- {
-	struct tm * TM;
-	static char UPTime[50];
-	time_t szClock = Uptime * 60;
 
-	TM = gmtime(&szClock);
-
-	sprintf(UPTime, "Uptime (Days Hours Mins)     %.2d:%.2d:%.2d\r",
-		TM->tm_yday, TM->tm_hour, TM->tm_min);
-
-	return UPTime;
- }
 
 static char *month[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 
@@ -3341,12 +3354,11 @@ VOID SendLocation()
 	SendReportMsg((char *)&AXMSG.DEST, Len + 16);
 
 	if (M0LTEMap)
-		SendDataToPktMap("");
+		SendDataToPktMap();
 
 	return;
 
 }
-
 
 
 
@@ -3365,7 +3377,8 @@ VOID SendMH(struct TNCINFO * TNC, char * call, char * freq, char * LOC, char * M
 	// Block includes the Msg Header (7 bytes), Len Does not!
 
 	memcpy(AXPTR->DEST, ReportDest, 7);
-	if (TNC->PortRecord->PORTCONTROL.PORTCALL[0])
+
+	if (TNC && TNC->PortRecord->PORTCONTROL.PORTCALL[0])
 		memcpy(AXPTR->ORIGIN, TNC->PortRecord->PORTCONTROL.PORTCALL, 7);
 	else
 		memcpy(AXPTR->ORIGIN, MYCALL, 7);
@@ -3525,8 +3538,10 @@ int __sync_lock_test_and_set(int * ptr, int val)
 #endif // MACBPQ
 
 
+#define GetSemaphore(Semaphore,ID) _GetSemaphore(Semaphore, ID, __FILE__, __LINE__)
 
-void GetSemaphore(struct SEM * Semaphore, int ID)
+
+void _GetSemaphore(struct SEM * Semaphore, int ID, char * File, int Line)
 {
 	//
 	//	Wait for it to be free
@@ -3570,6 +3585,8 @@ loop1:
 	Semaphore->SemProcessID = GetCurrentProcessId();
 	Semaphore->SemThreadID = GetCurrentThreadId();
 	SemHeldByAPI = ID;
+	Semaphore->Line = Line;
+	strcpy(Semaphore->File, File);
 
 	return;
 }
@@ -3717,6 +3734,11 @@ VOID OpenReportingSockets()
 	Chatreportdest.sin_port = htons(81);
 
 	_beginthread(ResolveUpdateThread, 0, NULL);
+
+	printf("MQTT Enabled %d\n", MQTT);
+
+	if (MQTT) 
+		MQTTConnect(MQTT_HOST, MQTT_PORT, MQTT_USER, MQTT_PASS);
 }
 
 VOID WriteMiniDumpThread();
@@ -4190,10 +4212,10 @@ VOID GetUIConfig()
 
 			if (group)
 			{
-				GetStringValue(group, "UIDEST", &UIUIDEST[Port][0]);
-				GetStringValue(group, "FileName", &FN[Port][0]);
-				GetStringValue(group, "Message", &Message[Port][0]);
-				GetStringValue(group, "Digis", Digis);
+				GetStringValue(group, "UIDEST", &UIUIDEST[Port][0], 11);
+				GetStringValue(group, "FileName", &FN[Port][0], 256);
+				GetStringValue(group, "Message", &Message[Port][0], 1000);
+				GetStringValue(group, "Digis", Digis, 100);
 				UIUIDigi[Port] = _strdup(Digis);
 	
 				Interval[Port] = GetIntValue(group, "Interval");
@@ -4224,15 +4246,21 @@ int GetIntValue(config_setting_t * group, char * name)
 	return 0;
 }
 
-BOOL GetStringValue(config_setting_t * group, char * name, char * value)
+BOOL GetStringValue(config_setting_t * group, char * name, char * value, int maxlen)
 {
-	const char * str;
+	char * str;
 	config_setting_t *setting;
 
 	setting = config_setting_get_member (group, name);
 	if (setting)
 	{
-		str =  config_setting_get_string (setting);
+		str = (char *)config_setting_get_string(setting);
+
+		if (strlen(str) > maxlen)
+		{
+			Debugprintf("Suspect config record %s", str);
+			str[maxlen] = 0;
+		}
 		strcpy(value, str);
 		return TRUE;
 	}
@@ -4764,13 +4792,14 @@ LRESULT CALLBACK UIWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam
 extern struct DATAMESSAGE * REPLYBUFFER;
 char * __cdecl Cmdprintf(TRANSPORTENTRY * Session, char * Bufferptr, const char * format, ...);
 
-void GetPortCTEXT(TRANSPORTENTRY * Session, char * Bufferptr, char * CmdTail, CMDX * CMD)
+void GetPortCTEXT(TRANSPORTENTRY * Session, char * Bufferptr, char * CmdTail, struct CMDX * CMD)
 {
 	char FN[250];
 	FILE *hFile;
 	struct stat STAT;
 	struct PORTCONTROL * PORT = PORTTABLE;
 	char PortList[256] = "";
+	int len = 0;
 
 	while (PORT)
 	{
@@ -4812,7 +4841,7 @@ void GetPortCTEXT(TRANSPORTENTRY * Session, char * Bufferptr, char * CmdTail, CM
 				*ptr = '\r';
 
 
-			sprintf(PortList, "%s,%d", PortList, PORT->PORTNUMBER);
+			len += sprintf(&PortList[len], ",%d", PORT->PORTNUMBER);
 		}
 
 		PORT = PORT->PORTPOINTER;
@@ -4917,7 +4946,7 @@ SOCKET OpenHTTPSock(char * Host)
 	{
 		err = WSAGetLastError();
 
-		Debugprintf("Resolve Failed for %s %d %x", "api.winlink.org", err, err);
+		Debugprintf("Resolve Failed for %s %d %x", Host, err, err);
 		return 0 ;			// Resolve failed
 	}
 	
@@ -4950,7 +4979,7 @@ SOCKET OpenHTTPSock(char * Host)
 }
 
 static char HeaderTemplate[] = "POST %s HTTP/1.1\r\n"
-	"Accept: application/json\r\n"
+	"Accept: app  N B lication/json\r\n"
 //	"Accept-Encoding: gzip,deflate,gzip, deflate\r\n"
 	"Content-Type: application/json\r\n"
 	"Host: %s:%d\r\n"
@@ -4960,14 +4989,24 @@ static char HeaderTemplate[] = "POST %s HTTP/1.1\r\n"
 	"\r\n";
 
 
-VOID SendWebRequest(SOCKET sock, char * Host, char * Request, char * Params, int Len, char * Return)
+DllExport VOID WINAPI SendWebRequest(char * Host, char * Request, char * Params, char * Return)
 {
+	SOCKET sock;
 	int InputLen = 0;
 	int inptr = 0;
 	char Buffer[4096];
 	char Header[256];
 	char * ptr, * ptr1;
 	int Sent;
+	int Len = strlen(Params);
+
+	if (M0LTEMap == 0)
+		return;
+
+	sock = OpenHTTPSock(Host);
+
+	if (sock == 0)
+		return;
 
 #ifdef LINBPQ
 	sprintf(Header, HeaderTemplate, Request, Host, 80, Len, "linbpq/", VersionString, Params);
@@ -4981,22 +5020,21 @@ VOID SendWebRequest(SOCKET sock, char * Host, char * Request, char * Params, int
 	{
 		int Err = WSAGetLastError();
 		Debugprintf("Error %d from Web Update send()", Err);
+		closesocket(sock);
 		return;
 	}
 
 	while (InputLen != -1)
 	{
-		InputLen = recv(sock, &Buffer[inptr], 4096 - inptr, 0);
+		InputLen = recv(sock, &Buffer[inptr], 4095 - inptr, 0);
 
 		if (InputLen == -1 || InputLen == 0)
 		{
 			int Err = WSAGetLastError();
 			Debugprintf("Error %d from Web Update recv()", Err);
+			closesocket(sock);
 			return;
 		}
-
-		//	As we are using a persistant connection, can't look for close. Check
-		//	for complete message
 
 		inptr += InputLen;
 
@@ -5036,10 +5074,9 @@ VOID SendWebRequest(SOCKET sock, char * Host, char * Request, char * Params, int
 					else
 					{
 						strlop(Buffer, 13);
-						Debugprintf("Map Update Params - %s", Params);
-
 						Debugprintf("Map Update failed - %s", Buffer);
 					}
+					closesocket(sock);
 					return;
 				}
 			}
@@ -5050,7 +5087,8 @@ VOID SendWebRequest(SOCKET sock, char * Host, char * Request, char * Params, int
 				if (ptr1)
 				{
 					// Just accept anything until I've sorted things with Lee
-					Debugprintf("%s", ptr1);
+
+					closesocket(sock);
 					Debugprintf("Web Database update ok");
 					return;
 				}
@@ -5141,11 +5179,16 @@ skipit:
 	}
 }
 
+void SendDataToPktMapThread();
 
-void SendDataToPktMap(char *Msg)
+void SendDataToPktMap()
 {
-	SOCKET sock;
-	char Return[256];
+	_beginthread(SendDataToPktMapThread,2048000,0);
+}
+
+void SendDataToPktMapThread()
+{
+	char Return[256] = "";
 	char Request[64];
 	char Params[50000];
 
@@ -5589,19 +5632,11 @@ void SendDataToPktMap(char *Msg)
     }
   ],
 
-
-
 */
 	//  "contact": "string",
 	//  "neighbours": [{"node": "G7TAJ","port": "30"}]
 
-	sock = OpenHTTPSock("packetnodes.spots.radio");
-
-	if (sock == 0)
-		return;
-
-	SendWebRequest(sock, "packetnodes.spots.radio", Request, Params, strlen(Params), Return);
-	closesocket(sock);
+	SendWebRequest("packetnodes.spots.radio", Request, Params, 0);
 }
 
 //	="{\"neighbours\": [{\"node\": \"G7TAJ\",\"port\": \"30\"}]}";

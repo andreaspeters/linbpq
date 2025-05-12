@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include "time.h"
-#include "CHeaders.h"
+#include "cheaders.h"
 //#include "tncinfo.h"
 //#include "adif.h"
 //#include "telnetserver.h"
@@ -760,7 +760,7 @@ void SaveVesselDataBase()
 
 void LoadNavAidDataBase()
 {
-	int i;
+	int i, n, count;
 
 	FILE *file;
 	char buf[256];
@@ -793,10 +793,12 @@ void LoadNavAidDataBase()
 
 	NavRecords = (struct NAVAIDRECORD **)malloc(NavAidCount * sizeof(void *));
 
+	count = 0;
+
 	for (i = 0; i < NavAidCount; i++)
 	{
 		navptr = (struct NAVAIDRECORD *)malloc(sizeof(struct NAVAIDRECORD));
-		NavRecords[i] = navptr;
+		NavRecords[count] = navptr;
 		memset(navptr, 0, sizeof(struct NAVAIDRECORD));
 
 		fgets(buf, 255, file);
@@ -806,6 +808,19 @@ void LoadNavAidDataBase()
 
 		token = strtok(NULL,  "|\n" );
 		strcpy(&navptr->name[0],token);
+
+		for (n = 0; n < 20; n++)
+		{
+			char c = navptr->name[n];
+
+			if (!isalpha(c) && !isdigit(c) && c != ' ' && c != '_')
+			{
+				count--;
+				break;
+			}
+		}
+
+		count++;
 
 		token = strtok(NULL, "|\n" );
 		navptr->lat = atof(token);
@@ -820,6 +835,7 @@ void LoadNavAidDataBase()
 		navptr->TimeLastUpdated = atoi(token);
 	}
 
+	NavAidCount = count;
 	fclose(file);
 }
 
@@ -831,6 +847,7 @@ void SaveNavAidDataBase()
 	FILE *file;
 	char FN[256];
 	struct NAVAIDRECORD * navptr;
+
 
 	if (BPQDirectory[0] == 0)
 	{
@@ -2372,6 +2389,8 @@ void ProcessAISNavAidMessage()
 	NavAidCount++;
 
 	ProcessAISNavAidMessage();
+	NavAidDBChanged = 1;
+	
 	
 	return;
 	

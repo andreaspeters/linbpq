@@ -32,7 +32,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 #endif
 #endif
 
-#include "CHeaders.h"
+#include "cheaders.h"
 #include "bpq32.h"
 #include "tncinfo.h"
 
@@ -346,41 +346,6 @@ loop:
 
 	return 1;
 }
-
-BOOL FreeDataReadConfigFile(int Port, int ProcLine())
-{
-	char buf[256],errbuf[256];
-
-	Config = PortConfig[Port];
-
-	if (Config)
-	{
-		// Using config from bpq32.cfg
-
-		if (strlen(Config) == 0)
-		{
-			return TRUE;
-		}
-
-		ptr1 = Config;
-		ptr2 = strchr(ptr1, 13);
-
-		if (!ProcLine(buf, Port))
-		{
-			WritetoConsoleLocal("\n");
-			WritetoConsoleLocal("Bad config record ");
-			WritetoConsoleLocal(errbuf);
-		}
-	}
-	else
-	{
-		sprintf(buf," ** Error - No Configuration info in bpq32.cfg");
-		WritetoConsoleLocal(buf);
-	}
-
-	return (TRUE);
-}
-
 
 
 VOID SuspendOtherPorts(struct TNCINFO * ThisTNC);
@@ -775,7 +740,10 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 
 		if (_memicmp(&buff->L2DATA[0], "RADIO ", 6) == 0)
 		{
-			sprintf(&buff->L2DATA[0], "%d %s", TNC->Port, &buff->L2DATA[6]);
+			char cmd[56];
+
+			strcpy(cmd, &buff->L2DATA[6]);
+			sprintf(&buff->L2DATA[0], "%d %s", TNC->Port, cmd);
 
 			if (Rig_Command(TNC->PortRecord->ATTACHEDSESSIONS[0]->L4CROSSLINK, &buff->L2DATA[0]))
 			{
@@ -867,7 +835,7 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 			char Message[256];
 			int Len, ret;
 
-			Len = sprintf(Message, TXF);
+			Len = sprintf(Message, "%s", TXF);
 			ret = send(TNC->TCPDataSock, (char *)&Message, Len, 0);
 			
 			if (buffptr)
@@ -971,7 +939,7 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 			memset(STREAM->RemoteCall, 0, 10);
 			strcpy(STREAM->RemoteCall, &buff->L2DATA[2]);
 			STREAM->ConnectTime = time(NULL); 
-			STREAM->BytesRXed = STREAM->BytesTXed = STREAM->PacketsSent = 0;
+			STREAM->bytesRXed = STREAM->bytesTXed = STREAM->PacketsSent = 0;
 
 			sprintf(TNC->WEB_TNCSTATE, "%s Connecting to %s", STREAM->MyCall, STREAM->RemoteCall);
 			MySetWindowText(TNC->xIDC_TNCSTATE, TNC->WEB_TNCSTATE);
@@ -1428,14 +1396,14 @@ VOID * FreeDataExtInit(EXTPORTDATA * PortEntry)
 	Consoleprintf("FreeData Host %s %d", TNC->HostName, TNC->TCPPort);
 
 	TNC->Port = port;
-	TNC->Hardware = H_FREEDATA;
+	TNC->PortRecord = PortEntry;
+	TNC->PortRecord->PORTCONTROL.HWType = TNC->Hardware = H_FREEDATA;
 
 	TNC->WeStartedTNC = 1;
 
 	TNC->ARDOPDataBuffer = malloc(MAXRXSIZE);
 	TNC->ARDOPBuffer = malloc(FREEDATABUFLEN);
 
-	TNC->PortRecord = PortEntry;
 
 	if (PortEntry->PORTCONTROL.PORTCALL[0] == 0)
 		memcpy(TNC->NodeCall, MYNODECALL, 10);
@@ -1881,7 +1849,7 @@ VOID FreeDataProcessTNCMessage(struct TNCINFO * TNC, char * Call, unsigned char 
 		if (App < 32)
 		{
 
-			memcpy(AppName, &ApplPtr[App * sizeof(CMDX)], 12);
+			memcpy(AppName, &ApplPtr[App * sizeof(struct CMDX)], 12);
 			AppName[12] = 0;
 
 			// if SendTandRtoRelay set and Appl is RMS change to RELAY
@@ -1950,7 +1918,7 @@ VOID FreeDataProcessTNCMessage(struct TNCINFO * TNC, char * Call, unsigned char 
 		MySetWindowText(TNC->xIDC_TNCSTATE, TNC->WEB_TNCSTATE);
 
 		STREAM->ConnectTime = time(NULL); 
-		STREAM->BytesRXed = STREAM->BytesTXed = STREAM->PacketsSent = 0;
+		STREAM->bytesRXed = STREAM->bytesTXed = STREAM->PacketsSent = 0;
 		STREAM->Connected = TRUE;
 
 		// Send Connect ACK
@@ -2019,20 +1987,7 @@ VOID FreeDataProcessTNCMessage(struct TNCINFO * TNC, char * Call, unsigned char 
 		{
 			// Create a traffic record
 		
-			char logmsg[120];	
-			time_t Duration;
-
-			Duration = time(NULL) - STREAM->ConnectTime;
-
-			if (Duration == 0)
-				Duration = 1;
-				
-			sprintf(logmsg,"Port %2d %9s Bytes Sent %d  BPS %d Bytes Received %d BPS %d Time %d Seconds",
-				TNC->Port, STREAM->RemoteCall,
-				STREAM->BytesTXed, (int)(STREAM->BytesTXed/Duration),
-				STREAM->BytesRXed, (int)(STREAM->BytesRXed/Duration), (int)Duration);
-
-			Debugprintf(logmsg);
+			hookL4SessionDeleted(TNC, STREAM);
 		}
 
 		STREAM->Connected = FALSE;		// Back to Command Mode
@@ -2062,7 +2017,7 @@ VOID FreeDataProcessTNCMessage(struct TNCINFO * TNC, char * Call, unsigned char 
 			WritetoTrace(TNC, Msg, 256);
 			Len -= 256;
 			Msg += 256;
-			STREAM->BytesRXed += 256;
+			STREAM->bytesRXed += 256;
 
 		}
 
@@ -2071,9 +2026,9 @@ VOID FreeDataProcessTNCMessage(struct TNCINFO * TNC, char * Call, unsigned char 
 		memcpy(buffptr->Data, Msg, Len);
 		C_Q_ADD(&STREAM->PACTORtoBPQ_Q, buffptr);
 		WritetoTrace(TNC, Msg, Len);
-		STREAM->BytesRXed += Len;
+		STREAM->bytesRXed += Len;
 		sprintf(TNC->WEB_TRAFFIC, "Sent %d RXed %d Queued %d",
-				STREAM->BytesTXed - TNC->FreeDataInfo->toSendCount, STREAM->BytesRXed, TNC->FreeDataInfo->toSendCount);
+				STREAM->bytesTXed - TNC->FreeDataInfo->toSendCount, STREAM->bytesRXed, TNC->FreeDataInfo->toSendCount);
 		MySetWindowText(TNC->xIDC_TRAFFIC, TNC->WEB_TRAFFIC);
 
 		return;
@@ -2255,7 +2210,7 @@ VOID FreeDataProcessNewConnect(struct TNCINFO * TNC, char * fromCall, char * toC
 	if (App < 32)
 	{
 
-		memcpy(AppName, &ApplPtr[App * sizeof(CMDX)], 12);
+		memcpy(AppName, &ApplPtr[App * sizeof(struct CMDX)], 12);
 		AppName[12] = 0;
 
 		// if SendTandRtoRelay set and Appl is RMS change to RELAY
@@ -2326,7 +2281,7 @@ VOID FreeDataProcessNewConnect(struct TNCINFO * TNC, char * fromCall, char * toC
 	MySetWindowText(TNC->xIDC_TNCSTATE, TNC->WEB_TNCSTATE);
 
 	STREAM->ConnectTime = time(NULL); 
-	STREAM->BytesRXed = STREAM->BytesTXed = STREAM->PacketsSent = 0;
+	STREAM->bytesRXed = STREAM->bytesTXed = STREAM->PacketsSent = 0;
 	STREAM->Connected = TRUE;
 
 	return;
@@ -2426,7 +2381,7 @@ void FlushData(struct TNCINFO * TNC)
 	Info->toSendTimeout = 0;
 
 	sprintf(TNC->WEB_TRAFFIC, "Sent %d RXed %d Queued %d",
-			STREAM->BytesTXed - TNC->FreeDataInfo->toSendCount, STREAM->BytesRXed, TNC->FreeDataInfo->toSendCount);
+			STREAM->bytesTXed - TNC->FreeDataInfo->toSendCount, STREAM->bytesRXed, TNC->FreeDataInfo->toSendCount);
 	MySetWindowText(TNC->xIDC_TRAFFIC, TNC->WEB_TRAFFIC);
 
 }
@@ -2449,10 +2404,10 @@ static int SendAsFile(struct TNCINFO * TNC, char * Call, char * Msg, int Len)
 	Info->toSendCount += Len;
 	Info->toSendTimeout = 10;		// About a second
 
-	STREAM->BytesTXed += Len;
+	STREAM->bytesTXed += Len;
 
 	sprintf(TNC->WEB_TRAFFIC, "Sent %d RXed %d Queued %d",
-			STREAM->BytesTXed - TNC->FreeDataInfo->toSendCount, STREAM->BytesRXed, TNC->FreeDataInfo->toSendCount);
+			STREAM->bytesTXed - TNC->FreeDataInfo->toSendCount, STREAM->bytesRXed, TNC->FreeDataInfo->toSendCount);
 	MySetWindowText(TNC->xIDC_TRAFFIC, TNC->WEB_TRAFFIC);
 
 	return Len;
@@ -2489,7 +2444,7 @@ static void SendCQ(struct TNCINFO * TNC)
 	char Message[256];
 	int Len, ret;
 
-	Len = sprintf(Message, CQ);
+	Len = sprintf(Message, "%s", CQ);
 	ret = send(TNC->TCPDataSock, (char *)&Message, Len, 0);
 }
 
@@ -2504,7 +2459,7 @@ static void SendBeacon(struct TNCINFO * TNC, int Interval)
 	if (Interval > 0)
 		Len = sprintf(Message, Template1, Interval);
 	else
-		Len = sprintf(Message, Template2);
+		Len = sprintf(Message, "%s", Template2);
 
 	ret = send(TNC->TCPDataSock, (char *)&Message, Len, 0);
 }
@@ -2719,7 +2674,7 @@ void ProcessMessageObject(struct TNCINFO * TNC, char * This)
 					WritetoTrace(TNC, Line, 256);
 					Len -= 256;
 					Line += 256;
-					STREAM->BytesRXed += 256;
+					STREAM->bytesRXed += 256;
 				}
 
 				buffptr = GetBuff();
@@ -2727,12 +2682,12 @@ void ProcessMessageObject(struct TNCINFO * TNC, char * This)
 				memcpy(buffptr->Data, Line, Len);
 				C_Q_ADD(&STREAM->PACTORtoBPQ_Q, buffptr);
 				WritetoTrace(TNC, Line, Len);
-				STREAM->BytesRXed += Len;
+				STREAM->bytesRXed += Len;
 
 			}
 
 			sprintf(TNC->WEB_TRAFFIC, "Sent %d RXed %d Queued %d",
-				STREAM->BytesTXed - TNC->FreeDataInfo->toSendCount, STREAM->BytesRXed, TNC->FreeDataInfo->toSendCount);
+				STREAM->bytesTXed - TNC->FreeDataInfo->toSendCount, STREAM->bytesRXed, TNC->FreeDataInfo->toSendCount);
 			MySetWindowText(TNC->xIDC_TRAFFIC, TNC->WEB_TRAFFIC);
 		}
 		return;
@@ -2811,7 +2766,7 @@ void ProcessMessageObject(struct TNCINFO * TNC, char * This)
 						WritetoTrace(TNC, Line, 256);
 						Len -= 256;
 						TEXT += 256;
-						STREAM->BytesRXed += 256;
+						STREAM->bytesRXed += 256;
 					}
 
 					buffptr = GetBuff();
@@ -2819,14 +2774,14 @@ void ProcessMessageObject(struct TNCINFO * TNC, char * This)
 					memcpy(buffptr->Data, Line, Len);
 					C_Q_ADD(&STREAM->PACTORtoBPQ_Q, buffptr);
 					WritetoTrace(TNC, Line, Len);
-					STREAM->BytesRXed += Len;
+					STREAM->bytesRXed += Len;
 
 					TEXT = rest;
 					rest = strlop(TEXT, 10);		// FreeData chat ues LF
 				}
 				
 				sprintf(TNC->WEB_TRAFFIC, "Sent %d RXed %d Queued %d",
-					STREAM->BytesTXed - TNC->FreeDataInfo->toSendCount, STREAM->BytesRXed, TNC->FreeDataInfo->toSendCount);
+					STREAM->bytesTXed - TNC->FreeDataInfo->toSendCount, STREAM->bytesRXed, TNC->FreeDataInfo->toSendCount);
 				MySetWindowText(TNC->xIDC_TRAFFIC, TNC->WEB_TRAFFIC);
 			}
 		}
@@ -3158,22 +3113,8 @@ void ProcessTNCJSON(struct TNCINFO * TNC, char * Msg, int Len)
 
 					if (STREAM->Connected)
 					{
-						// Create a traffic record
-
-						char logmsg[120];	
-						time_t Duration;
-
-						Duration = time(NULL) - STREAM->ConnectTime;
-
-						if (Duration == 0)
-							Duration = 1;
-
-						sprintf(logmsg,"Port %2d %9s Bytes Sent %d  BPS %d Bytes Received %d BPS %d Time %d Seconds",
-							TNC->Port, STREAM->RemoteCall,
-							STREAM->BytesTXed, (int)(STREAM->BytesTXed/Duration),
-							STREAM->BytesRXed, (int)(STREAM->BytesRXed/Duration), (int)Duration);
-
-						Debugprintf(logmsg);
+	
+						hookL4SessionDeleted(TNC, STREAM);
 
 						STREAM->Connected = FALSE;		// Back to Command Mode
 						STREAM->ReportDISC = TRUE;		// Tell Node
@@ -3351,20 +3292,7 @@ void ProcessTNCJSON(struct TNCINFO * TNC, char * Msg, int Len)
 				{
 					// Create a traffic record
 
-					char logmsg[120];	
-					time_t Duration;
-
-					Duration = time(NULL) - STREAM->ConnectTime;
-
-					if (Duration == 0)
-						Duration = 1;
-
-					sprintf(logmsg,"Port %2d %9s Bytes Sent %d  BPS %d Bytes Received %d BPS %d Time %d Seconds",
-						TNC->Port, STREAM->RemoteCall,
-						STREAM->BytesTXed, (int)(STREAM->BytesTXed/Duration),
-						STREAM->BytesRXed, (int)(STREAM->BytesRXed/Duration), (int)Duration);
-
-					Debugprintf(logmsg);
+					hookL4SessionDeleted(TNC, STREAM);
 
 					STREAM->Connected = FALSE;		// Back to Command Mode
 					STREAM->ReportDISC = TRUE;		// Tell Node
@@ -3722,7 +3650,7 @@ int FreeDataDisconnect(struct TNCINFO * TNC)
 
 //	return FreeDataSendCommand(TNC, "D");
 
-	Len = sprintf(Msg, Disconnect);
+	Len = sprintf(Msg, "%s", Disconnect);
 
 	return send(TNC->TCPDataSock, Msg, Len, 0);
 }
@@ -3734,7 +3662,7 @@ int FreeGetData(struct TNCINFO * TNC)
 	char Msg[128];
 	int Len;
 
-	Len = sprintf(Msg, GetData);
+	Len = sprintf(Msg, "%s", GetData);
 
 	return send(TNC->TCPDataSock, Msg, Len, 0);
 }
@@ -4214,7 +4142,7 @@ void buildParamString(struct TNCINFO * TNC, char * line)
 		FDI->TuningRange * -1.0, FDI->TuningRange * 1.0, FDI->TXLevel);
 
 	if (FDI->hamlibHost)
-		sprintf(line, "%s --rigctld_ip %s --rigctld_port %d", line, FDI->hamlibHost, FDI->hamlibPort);
+		sprintf(&line[strlen(line)], " --rigctld_ip %s --rigctld_port %d", FDI->hamlibHost, FDI->hamlibPort);
 
 	if (FDI->LimitBandWidth)
 		strcat(line, " --500hz");

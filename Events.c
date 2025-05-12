@@ -23,6 +23,8 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #include "compatbits.h"
 #include <string.h>
+#include "asmstrucs.h"
+#include "tncinfo.h"
 
 VOID __cdecl Debugprintf(const char * format, ...);
 
@@ -37,6 +39,11 @@ VOID __cdecl Debugprintf(const char * format, ...);
 #endif
 
 extern BOOL EventsEnabled;
+void MQTTReportSession(char * Msg);
+extern int MQTT;
+
+
+extern char Modenames[19][10];
 
 // Runs use specified routine on certain event
 #ifndef WIN32
@@ -110,13 +117,127 @@ DllExport void APIENTRY RunEventProgram(char * Program, char * Param)
 
 void hookL2SessionAccepted(int Port, char * remotecall, char * ourcall, struct _LINKTABLE * LINK)
 {
+	// Incoming SABM
+
+	LINK->ConnectTime = time(NULL);
+	LINK->bytesTXed = LINK->bytesRXed = 0;
+
+	strcpy(LINK->callingCall, remotecall);
+	strcpy(LINK->receivingCall, ourcall);
+	strcpy(LINK->Direction, "In");
 }
 
-void hookL2SessionDeleted(int Port, char * fromCall, char * toCall, struct _LINKTABLE * LINK)
+void hookL2SessionDeleted(struct _LINKTABLE * LINK)
 {
+	// calculate session time and av bytes/min in and out
+
+	if (LINK->ConnectTime)
+	{
+		if (LINK->bytesTXed == 0 && LINK->bytesRXed == 0)
+		{
+			// assume failed connect and ignore for now - maybe log later
+
+		}
+		else
+		{
+			char Msg[256];
+			char timestamp[16];
+			time_t sessionTime = time(NULL) - LINK->ConnectTime;
+			double avBytesSent = LINK->bytesTXed / (sessionTime / 60.0);
+			double avBytesRXed = LINK->bytesRXed / (sessionTime / 60.0);
+			time_t Now = time(NULL);
+			struct tm * TM = localtime(&Now);
+
+			sprintf(timestamp, "%02d:%02d:%02d", TM->tm_hour, TM->tm_min, TM->tm_sec);
+
+			if (sessionTime == 0)
+				sessionTime = 1;				// Or will get divide by zero error 
+
+			Debugprintf("KISS Session Stats Port %d %s %s %d secs Bytes Sent %d  BPM %4.2f Bytes Received %d %4.2f BPM ", 
+				LINK->LINKPORT->PORTNUMBER, LINK->callingCall, LINK->receivingCall, sessionTime, LINK->bytesTXed, avBytesSent, LINK->bytesRXed, avBytesRXed, timestamp);
+
+
+			sprintf(Msg, "{\"mode\": \"%s\", \"direction\": \"%s\", \"port\": %d, \"callfrom\": \"%s\", \"callto\": \"%s\", \"time\": %d,  \"bytesSent\": %d," 
+				"\"BPMSent\": %4.2f, \"BytesReceived\": %d,  \"BPMReceived\": %4.2f, \"timestamp\": \"%s\"}",
+				"KISS", LINK->Direction, LINK->LINKPORT->PORTNUMBER, LINK->callingCall, LINK->receivingCall, sessionTime,
+				LINK->bytesTXed,  avBytesSent, LINK->bytesRXed, avBytesRXed, timestamp);
+
+			if (MQTT)
+				MQTTReportSession(Msg);
+		}
+
+		LINK->ConnectTime = 0;
+	}
+
+	if (LINK->Sent && LINK->Received && (LINK->SentAfterCompression || LINK->ReceivedAfterExpansion))
+		Debugprintf("L2 Compression Stats %s %s TX %d %d %d%% RX %d %d %d%%", LINK->callingCall, LINK->receivingCall,
+			LINK->Sent, LINK->SentAfterCompression, ((LINK->Sent - LINK->SentAfterCompression) * 100) / LINK->Sent,
+			LINK->Received, LINK->ReceivedAfterExpansion, ((LINK->ReceivedAfterExpansion - LINK->Received) * 100) / LINK->Received);
+
 }
 
 void hookL2SessionAttempt(int Port, char * ourcall, char * remotecall, struct _LINKTABLE * LINK)
 {
+	LINK->ConnectTime = time(NULL);
+	LINK->bytesTXed = LINK->bytesRXed = 0;
+
+	strcpy(LINK->callingCall, ourcall);
+	strcpy(LINK->receivingCall, remotecall);
+	strcpy(LINK->Direction, "Out");
 }
+
+void hookL4SessionAttempt(struct STREAMINFO * STREAM, char * remotecall, char * ourcall)
+{
+	// Outgoing Connect
+
+	STREAM->ConnectTime = time(NULL);
+	STREAM->bytesTXed = STREAM->bytesRXed = 0;
+
+	strcpy(STREAM->callingCall, ourcall);
+	strcpy(STREAM->receivingCall, remotecall);
+	strcpy(STREAM->Direction, "Out");
+}
+
+void hookL4SessionAccepted(struct STREAMINFO * STREAM, char * remotecall, char * ourcall)
+{
+	// Incoming Connect
+
+	STREAM->ConnectTime = time(NULL);
+	STREAM->bytesTXed = STREAM->bytesRXed = 0;
+
+	strcpy(STREAM->callingCall, remotecall);
+	strcpy(STREAM->receivingCall, ourcall);
+	strcpy(STREAM->Direction, "In");
+}
+
+void hookL4SessionDeleted(struct TNCINFO * TNC, struct STREAMINFO * STREAM)
+{
+	char Msg[256];
+
+	char timestamp[16];
+
+	if (STREAM->ConnectTime)
+	{
+		time_t sessionTime = time(NULL) - STREAM->ConnectTime;
+		double avBytesRXed = STREAM->bytesRXed / (sessionTime / 60.0);
+		double avBytesSent = STREAM->bytesTXed / (sessionTime / 60.0);
+		time_t Now = time(NULL);
+		struct tm * TM = localtime(&Now);
+		sprintf(timestamp, "%02d:%02d:%02d", TM->tm_hour, TM->tm_min, TM->tm_sec);
+
+		if (sessionTime == 0)
+			sessionTime = 1;				// Or will get divide by zero error 
+ 
+		sprintf(Msg, "{\"mode\": \"%s\", \"direction\": \"%s\", \"port\": %d, \"callfrom\": \"%s\", \"callto\": \"%s\", \"time\": %d,  \"bytesSent\": %d," 
+			"\"BPMSent\": %4.2f, \"BytesReceived\": %d,  \"BPMReceived\": %4.2f, \"timestamp\": \"%s\"}",
+			Modenames[TNC->Hardware - 1], STREAM->Direction, TNC->Port, STREAM->callingCall, STREAM->receivingCall, sessionTime,
+			STREAM->bytesTXed,  avBytesSent, STREAM->bytesRXed, avBytesRXed, timestamp);
+
+		if (MQTT)
+			MQTTReportSession(Msg);
+
+		STREAM->ConnectTime = 0;
+	}
+}
+
 

@@ -23,6 +23,9 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #include "bpqmail.h"
 
+#define GetSemaphore(Semaphore,ID) _GetSemaphore(Semaphore, ID, __FILE__, __LINE__)
+void _GetSemaphore(struct SEM * Semaphore, int ID, char * File, int Line);
+
 int CurrentWPIndex;
 char CurrentWPCall[10];
 
@@ -34,6 +37,8 @@ VOID Do_Save_WPRec(HWND hDlg);
 VOID SaveInt64Value(config_setting_t * group, char * name, long long value);
 VOID SaveIntValue(config_setting_t * group, char * name, int value);
 VOID SaveStringValue(config_setting_t * group, char * name, char * value);
+BOOL GetStringValue(config_setting_t * group, char * name, char * value, int maxlen);
+void MQTTMessageEvent(void* message);
 
 WPRec * AllocateWPRecord()
 {
@@ -120,7 +125,7 @@ VOID GetWPDatabase()
 
 			sprintf(Key, "R%d", i++);
 
-			GetStringValue(group, Key, Record);
+			GetStringValue(group, Key, Record, 1024);
 
 			if (Record[0] == 0)			// End of List
 				return;
@@ -268,23 +273,23 @@ WPOK:;
 
 		memset(&WPRec, 0, sizeof(WPRec));
 
-		GetStringValue(wpgroup, "c", WPRec.callsign);
-		GetStringValue(wpgroup, "n", WPRec.name);
+		GetStringValue(wpgroup, "c", WPRec.callsign, 6);
+		GetStringValue(wpgroup, "n", WPRec.name, 12);
 
 		WPRec.Type = GetIntValue(wpgroup, "T");
 		WPRec.changed = GetIntValue(wpgroup, "ch");
 		WPRec.seen = GetIntValue(wpgroup, "s");
 
-		GetStringValue(wpgroup, "h", WPRec.first_homebbs);
-		GetStringValue(wpgroup, "sh", WPRec.secnd_homebbs);
-		GetStringValue(wpgroup, "z", WPRec.first_zip);
-		GetStringValue(wpgroup, "sz", WPRec.secnd_zip);
+		GetStringValue(wpgroup, "h", WPRec.first_homebbs, 40);
+		GetStringValue(wpgroup, "sh", WPRec.secnd_homebbs, 40);
+		GetStringValue(wpgroup, "z", WPRec.first_zip, 8);
+		GetStringValue(wpgroup, "sz", WPRec.secnd_zip, 8);
 
-		GetStringValue(wpgroup, "q", Temp);
+		GetStringValue(wpgroup, "q", Temp, 30);
 		Temp[30] = 0;
 		strcpy(WPRec.first_qth, Temp);
 	
-		GetStringValue(wpgroup, "sq", Temp);
+		GetStringValue(wpgroup, "sq", Temp, 30);
 		Temp[30] = 0;
 		strcpy(WPRec.secnd_qth, Temp);
 
@@ -945,6 +950,9 @@ VOID ProcessWPMsg(char * MailBuffer, int Size, char * FirstRLine)
 
 		WPLen =	ptr2 - ptr1;
 
+		if (WPLen > 128)
+			return;
+
 		if ((memcmp(ptr1, "On ", 3)  == 0) && (WPLen < 200))
 		{
 			char * Date;
@@ -1029,7 +1037,7 @@ it will not be replaced. This flag will be used in case the WP update messages a
 					WPDate -= (time_t)_MYTIMEZONE;
 					TypeString = strlop(Call, '/');
 					
-					if (strlen(Call) < 3 || strlen(Call) > 9)
+					if (strlen(Call) < 3 || strlen(Call) > 6)
 						return;
 
 					if (TypeString)
@@ -1416,7 +1424,7 @@ int CreateWPMessage()
 //		if (ptr->last_modif > LASTWPSendTime && ptr->Type == 'U' && ptr->first_homebbs[0])
 		if (ptr->changed && ptr->last_modif > LASTWPSendTime && ptr->first_homebbs[0])
 		{
-			tm = gmtime(&ptr->last_modif);
+			tm = gmtime((time_t *)&ptr->last_modif);
 			MsgLen += sprintf(Buffptr, "On %02d%02d%02d %s/%c @ %s zip %s %s %s\r\n", 
 				tm->tm_year-100, tm->tm_mon+1, tm->tm_mday,
 				ptr->callsign, ptr->Type, ptr->first_homebbs,
@@ -1495,6 +1503,10 @@ int CreateWPMessage()
 
 		BuildNNTPList(Msg);				// Build NNTP Groups list
 
+#ifndef NOMQTT
+		if (MQTT)
+			MQTTMessageEvent(Msg);
+#endif
 		To++;
 	}
 
@@ -1533,8 +1545,8 @@ VOID CreateWPReport()
 		len = sprintf(Line, "%-7s,%c,%s,%s,%s,%s,%s,%s,%s,%d,%s,%s\r\n",
 			WP->callsign, WP->Type, WP->first_homebbs, WP->first_qth, WP->first_zip, 
 			WP->secnd_homebbs, WP->secnd_qth, WP->secnd_zip, WP->name, WP->changed,
-			FormatWPDate(WP->last_modif),
-			FormatWPDate(WP->last_seen));
+			FormatWPDate((time_t)WP->last_modif),
+			FormatWPDate((time_t)WP->last_seen));
 		
 		fwrite(Line, 1, len, hFile);
 	}

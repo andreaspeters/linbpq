@@ -23,7 +23,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #define _CRT_SECURE_NO_DEPRECATE
 
-#include "CHeaders.h"
+#include "cheaders.h"
 
 extern int (WINAPI FAR *GetModuleFileNameExPtr)();
 extern int (WINAPI FAR *EnumProcessesPtr)();
@@ -65,12 +65,12 @@ extern int (WINAPI FAR *GetModuleFileNameExPtr)();
 ;
 int SemHeldByAPI;
 
-static void ConnecttoFLDigiThread(void * portptr);
+void ConnecttoFLDigiThread(void * portptr);
 
 void CreateMHWindow();
 int Update_MH_List(struct in_addr ipad, char * call, char proto);
 
-static int ConnecttoFLDigi();
+int ConnecttoFLDigi(int port);
 static int ProcessReceivedData(int bpqport);
 static int ProcessLine(char * buf, int Port);
 int KillTNC(struct TNCINFO * TNC);
@@ -93,6 +93,7 @@ VOID CheckFLDigiData(struct TNCINFO * TNC);
 VOID SendPacket(struct TNCINFO * TNC, UCHAR * Msg, int MsgLen);
 int	KissEncode(UCHAR * inbuff, UCHAR * outbuff, int len);
 VOID SendXMLCommand(struct TNCINFO * TNC, char * Command, char * Value, char ParamType);
+VOID SendXMLCommandInt(struct TNCINFO * TNC, char * Command, int Value, char ParamType);
 VOID FLSlowTimer(struct TNCINFO * TNC);
 VOID SendKISSCommand(struct TNCINFO * TNC, char * Msg);
 
@@ -100,8 +101,6 @@ int DoScanLine(struct TNCINFO * TNC, char * Buff, int Len);
 VOID SuspendOtherPorts(struct TNCINFO * ThisTNC);
 VOID ReleaseOtherPorts(struct TNCINFO * ThisTNC);
 VOID WritetoTrace(struct TNCINFO * TNC, char * Msg, int Len);
-
-char * strlop(char * buf, char delim);
 
 extern UCHAR BPQDirectory[];
 
@@ -539,8 +538,12 @@ pollloop:
 
 			if (_memicmp(&buff->L2DATA[0], "RADIO ", 6) == 0)
 			{
-				sprintf(&buff->L2DATA[0], "%d %s", TNC->Port, &buff->L2DATA[6]);
+				char cmd[56];
 
+				strcpy(cmd, &buff->L2DATA[6]);
+				sprintf(&buff->L2DATA[0], "%d %s", TNC->Port, cmd);
+
+	
 				if (Rig_Command(TNC->PortRecord->ATTACHEDSESSIONS[0]->L4CROSSLINK, &buff->L2DATA[0]))
 				{
 				}
@@ -592,7 +595,7 @@ pollloop:
 				}
 				else
 				{
-					SendXMLCommand(TNC, "modem.set_carrier", (char *)atoi(&buff->L2DATA[5]), 'I');
+					SendXMLCommandInt(TNC, "modem.set_carrier", atoi(&buff->L2DATA[5]), 'I');
 				}
 
 				TNC->InternalCmd = TRUE;
@@ -1181,7 +1184,6 @@ VOID * FLDigiExtInit(EXTPORTDATA * PortEntry)
 	}
 
 	TNC->Port = port;
-
 	TNC->PortRecord = PortEntry;
 
 	if (PortEntry->PORTCONTROL.PORTCALL[0] == 0)
@@ -1212,7 +1214,7 @@ VOID * FLDigiExtInit(EXTPORTDATA * PortEntry)
 	ptr=strchr(TNC->NodeCall, ' ');
 	if (ptr) *(ptr) = 0;					// Null Terminate
 
-	TNC->Hardware = H_FLDIGI;
+	TNC->PortRecord->PORTCONTROL.HWType = TNC->Hardware = H_FLDIGI;
 
 	if (TNC->BusyWait == 0)
 		TNC->BusyWait = 10;
@@ -1482,14 +1484,14 @@ static int ProcessLine(char * buf, int Port)
 	return (TRUE);	
 }
 
-static int ConnecttoFLDigi(int port)
+int ConnecttoFLDigi(int port)
 {
 	_beginthread(ConnecttoFLDigiThread, 0, (void *)(size_t)port);
 
 	return 0;
 }
 
-static VOID ConnecttoFLDigiThread(void * portptr)
+VOID ConnecttoFLDigiThread(void * portptr)
 {	
 	int port = (int)(size_t)portptr;
 	char Msg[255];
@@ -1637,7 +1639,7 @@ static VOID ConnecttoFLDigiThread(void * portptr)
 VOID UpdateStatsLine(struct TNCINFO * TNC, struct STREAMINFO * STREAM)
 {
 	sprintf(TNC->WEB_TRAFFIC, "RX %d TX %d ACKED %d Resent %d Queued %d",
-	STREAM->BytesRXed, STREAM->BytesTXed, STREAM->BytesAcked, STREAM->BytesResent, STREAM->BytesOutstanding);
+	STREAM->bytesRXed, STREAM->bytesTXed, STREAM->BytesAcked, STREAM->BytesResent, STREAM->BytesOutstanding);
 	SetWindowText(TNC->xIDC_TRAFFIC, TNC->WEB_TRAFFIC);
 }
 
@@ -2531,7 +2533,7 @@ VOID ProcessFLDigiData(struct TNCINFO * TNC, UCHAR * Input, int Len, char Channe
 
 		strcpy(STREAM->MyCall, call2);
 		STREAM->ConnectTime = time(NULL); 
-		STREAM->BytesRXed = STREAM->BytesTXed = STREAM->BytesAcked = STREAM->BytesResent = 0;
+		STREAM->bytesRXed = STREAM->bytesTXed = STREAM->BytesAcked = STREAM->BytesResent = 0;
 		
 		if (TNC->RIG && TNC->RIG != &TNC->DummyRig && strcmp(TNC->RIG->RigName, "PTT"))
 		{
@@ -2580,7 +2582,7 @@ VOID ProcessFLDigiData(struct TNCINFO * TNC, UCHAR * Input, int Len, char Channe
 		{
 			char AppName[13];
 
-			memcpy(AppName, &ApplPtr[App * sizeof(CMDX)], 12);
+			memcpy(AppName, &ApplPtr[App * sizeof(struct CMDX)], 12);
 			AppName[12] = 0;
 
 			// Make sure app is available
@@ -2690,7 +2692,7 @@ AckConnectRequest:
 			goto SendKReply;		// Repeated ACK
 
 		STREAM->ConnectTime = time(NULL); 
-		STREAM->BytesRXed = STREAM->BytesTXed = STREAM->BytesAcked = STREAM->BytesResent = 0;
+		STREAM->bytesRXed = STREAM->bytesTXed = STREAM->BytesAcked = STREAM->BytesResent = 0;
 		STREAM->Connected = TRUE;
 
 		ARQ->ARQTimerState = 0;
@@ -2951,22 +2953,7 @@ SendKReply:
 
 		if (STREAM->Connected)
 		{
-			// Create a traffic record
-		
-			char logmsg[120];	
-			time_t Duration;
-
-			Duration = time(NULL) - STREAM->ConnectTime;
-				
-			if (Duration == 0)
-				Duration = 1;
-			
-			sprintf(logmsg,"Port %2d %9s Bytes Sent %d  BPS %d Bytes Received %d BPS %d Time %d Seconds",
-				TNC->Port, STREAM->RemoteCall,
-				STREAM->BytesTXed, (int)(STREAM->BytesTXed/Duration),
-				STREAM->BytesRXed, (int)(STREAM->BytesRXed/Duration), (int)Duration);
-
-			Debugprintf(logmsg);
+			hookL4SessionDeleted(TNC, STREAM);
 		}
 
 		STREAM->Connecting = FALSE;
@@ -3029,7 +3016,7 @@ SendKReply:
 
 			buffptr->Len = Len;
 			memcpy(buffptr->Data, &Input[1], Len);
-			STREAM->BytesRXed += Len;
+			STREAM->bytesRXed += Len;
 
 			UpdateStatsLine(TNC, STREAM);
 
@@ -3146,7 +3133,7 @@ VOID SendARQData(struct TNCINFO * TNC, PMSGWITHLEN Buffer)
 
 	ARQ->TXHOLDQ[ARQ->TXSeq] = Buffer;
 
-	STREAM->BytesTXed += Origlen;
+	STREAM->bytesTXed += Origlen;
 
 	UpdateStatsLine(TNC, STREAM);
 
@@ -3212,7 +3199,7 @@ VOID FLReleaseTNC(struct TNCINFO * TNC)
 		else
 		{
 			SendXMLCommand(TNC, "modem.set_by_name", TNC->FLInfo->DefaultMode, 'S');
-			SendXMLCommand(TNC, "modem.set_carrier", (char *)TNC->FLInfo->DefaultFreq, 'I');
+			SendXMLCommandInt(TNC, "modem.set_carrier", TNC->FLInfo->DefaultFreq, 'I');
 		}
 	}
 	//	Start Scanner
@@ -3902,6 +3889,27 @@ VOID SendXMLCommand(struct TNCINFO * TNC, char * Command, char * Value, char Par
 			sprintf(ValueString, "<params><param><value><string>%s</string></value></param></params\r\n>", Value);
 		else
 			sprintf(ValueString, "<params><param><value><i4>%d</i4></value></param></params\r\n>", Value);
+
+	strcpy(FL->LastXML, Command);
+	Len = sprintf(ReqBuf, Req, FL->LastXML, ValueString);
+	Len = sprintf(SendBuff, MsgHddr, Len, ReqBuf);
+	send(TNC->TCPSock, SendBuff, Len, 0); 
+	return;
+}
+
+VOID SendXMLCommandInt(struct TNCINFO * TNC, char * Command, int Value, char ParamType)
+{
+	int Len;
+	char ReqBuf[512];
+	char SendBuff[512];
+	struct FLINFO *	FL = TNC->FLInfo;
+	struct ARQINFO * ARQ = TNC->ARQInfo;
+	char ValueString[256] ="";
+
+	if (!TNC->CONNECTED || TNC->FLInfo->KISSMODE)
+		return;
+
+	sprintf(ValueString, "<params><param><value><i4>%d</i4></value></param></params\r\n>", Value);
 
 	strcpy(FL->LastXML, Command);
 	Len = sprintf(ReqBuf, Req, FL->LastXML, ValueString);

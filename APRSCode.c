@@ -22,11 +22,10 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 // First Version, November 2011
 
 #pragma data_seg("_BPQDATA")
-
 #define _CRT_SECURE_NO_DEPRECATE 
 
 #include <stdio.h>
-#include "CHeaders.h"
+#include "cheaders.h"
 #include "bpq32.h"
 #include <time.h>
 #include "kernelresource.h"
@@ -63,7 +62,6 @@ VOID __cdecl Debugprintf(const char * format, ...);
 VOID __cdecl Consoleprintf(const char * format, ...);
 BOOL APIENTRY  Send_AX(PMESSAGE Block, DWORD Len, UCHAR Port);
 VOID Send_AX_Datagram(PDIGIMESSAGE Block, DWORD Len, UCHAR Port);
-char * strlop(char * buf, char delim);
 int APRSDecodeFrame(char * msg, char * buffer, time_t Stamp, uint64_t Mask);		// Unsemaphored DecodeFrame
 APRSHEARDRECORD * UpdateHeard(UCHAR * Call, int Port);
 BOOL CheckforDups(char * Call, char * Msg, int Len);
@@ -88,7 +86,7 @@ double myDistance(double laa, double loa, BOOL KM);
 struct STATIONRECORD * FindStation(char * Call, BOOL AddIfNotFound);
 int DecodeAPRSPayload(char * Payload, struct STATIONRECORD * Station);
 BOOL KillOldTNC(char * Path);
-int FromLOC(char * Locator, double * pLat, double * pLon);
+
 BOOL ToLOC(double Lat, double Lon , char * Locator);
 BOOL InternalSendAPRSMessage(char * Text, char * Call);
 void UndoTransparency(char * input);
@@ -104,6 +102,7 @@ void ClearSavedMessages();
 void GetSavedAPRSMessages();
 static VOID GPSDConnect(void * unused);
 int CanPortDigi(int Port);
+int FromLOC(char * Locator, double * pLat, double * pLon);
 
 extern int SemHeldByAPI;
 extern int APRSMONDECODE();
@@ -348,7 +347,7 @@ APRSHEARDRECORD MHTABLE[MAXHEARD] = {0};
 
 APRSHEARDRECORD * MHDATA = &MHTABLE[0];
 
-static SOCKET sock = (SOCKET)0;
+static SOCKET sock = 0;
 
 //Duplicate suppression Code
 
@@ -554,6 +553,8 @@ int APRSWriteLog(char * msg)
 	UCHAR Value[MAX_PATH];
 	time_t T;
 	struct tm * tm;
+	int n;
+
 
 	if (LogAPRSIS == 0)
 		return 0;
@@ -575,8 +576,9 @@ int APRSWriteLog(char * msg)
 		strcat(Value, "logs/APRS_");
 	}
 
-	sprintf(Value, "%s%02d%02d%02d.log", Value,
-				tm->tm_year - 100, tm->tm_mon+1, tm->tm_mday);
+	n = strlen(Value);
+
+	sprintf(&Value[n], "%02d%02d%02d.log", tm->tm_year - 100, tm->tm_mon+1, tm->tm_mday);
 
 	if ((file = fopen(Value, "ab")) == NULL)
 		return FALSE;
@@ -3113,7 +3115,7 @@ VOID APRSISThread(void * Report)
 	BOOL bcopt=TRUE;
 	char Buffer[1000];
 	int InputLen = 1;		// Non-zero
-	char errmsg[100];
+	char errmsg[300];
 	char * ptr;
 	size_t inptr = 0;
 	char APRSinMsg[1000];
@@ -3674,7 +3676,7 @@ BOOL CheckforDups(char * Call, char * Msg, int Len)
 			if (ptr1)
 				*ptr1 = 0;
 
-//			Debugprintf("Duplicate Message supressed %s", Msg);
+//			Debugprintf("Duplicate Message suppressed %s", Msg);
 			return TRUE;					// Duplicate
 		}
 	}
@@ -7666,7 +7668,7 @@ VOID APRSProcessHTTPMessage(SOCKET sock, char * MsgPtr,	BOOL LOCAL, BOOL COOKIE)
 
 			}
 
-			OutputLen += sprintf(&OutBuffer[OutputLen], WebTrailer);
+			OutputLen += sprintf(&OutBuffer[OutputLen], "%s", WebTrailer);
 
 			HeaderLen = sprintf(Header, "HTTP/1.0 200 OK\r\nContent-Length: %d\r\nContent-Type: text/html\r\n\r\n", OutputLen);
 			sendandcheck(sock, Header, HeaderLen);
@@ -7711,7 +7713,7 @@ VOID APRSProcessHTTPMessage(SOCKET sock, char * MsgPtr,	BOOL LOCAL, BOOL COOKIE)
 
 			}
 
-			OutputLen += sprintf(&OutBuffer[OutputLen], WebTrailer);
+			OutputLen += sprintf(&OutBuffer[OutputLen], "%s", WebTrailer);
 
 			HeaderLen = sprintf(Header, "HTTP/1.0 200 OK\r\nContent-Length: %d\r\nContent-Type: text/html\r\n\r\n", OutputLen);
 			sendandcheck(sock, Header, HeaderLen);
@@ -8113,7 +8115,7 @@ extern char OrigCmdBuffer[81];
 
 BOOL isSYSOP(TRANSPORTENTRY * Session, char * Bufferptr);
 
-VOID APRSCMD(TRANSPORTENTRY * Session, char * Bufferptr, char * CmdTail, CMDX * CMD)
+VOID APRSCMD(TRANSPORTENTRY * Session, char * Bufferptr, char * CmdTail, struct CMDX * CMD)
 {
 	// APRS Subcommands. Default for compatibility is APRSMH
 
@@ -9178,7 +9180,7 @@ void GetSavedAPRSMessages()
 	if ((file = fopen(FN, "r")) == NULL)
 		return ;
 
-	while (fgets(Line, 512, file))
+	while (fgets(Line, sizeof(Line), file))
 	{
 		Stamp = Line;
 		From = strlop(Stamp, ' ');

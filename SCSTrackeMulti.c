@@ -31,7 +31,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #define MaxStreams 10	
 
-#include "CHeaders.h"
+#include "cheaders.h"
 #include "tncinfo.h"
 
 #include "bpq32.h"
@@ -48,7 +48,6 @@ extern UCHAR BPQDirectory[];
 static RECT Rect;
 
 VOID __cdecl Debugprintf(const char * format, ...);
-char * strlop(char * buf, char delim);
 BOOL KAMStartPort(struct PORTCONTROL * PORT);
 BOOL KAMStopPort(struct PORTCONTROL * PORT);
 
@@ -377,7 +376,8 @@ void * TrackerMExtInit(EXTPORTDATA *  PortEntry)
 	}
 	
 	TNC->Port = port;
-	TNC->Hardware = H_TRKM;
+	TNC->PortRecord = PortEntry;
+	TNC->PortRecord->PORTCONTROL.HWType = TNC->Hardware = H_TRKM;
 
 	// Set up DED addresses for streams
 	
@@ -392,8 +392,6 @@ void * TrackerMExtInit(EXTPORTDATA *  PortEntry)
 	PortEntry->MAXHOSTMODESESSIONS = TNC->PacketChannels + 1; //TNC->PacketChannels + 1;
 	PortEntry->PERMITGATEWAY = TRUE;					// Can change ax.25 call on each stream
 	PortEntry->SCANCAPABILITIES = NONE;				// Scan Control 3 stage/conlock 
-
-	TNC->PortRecord = PortEntry;
 
 	if (PortEntry->PORTCONTROL.PORTCALL[0] == 0)
 		memcpy(TNC->NodeCall, MYNODECALL, 10);
@@ -825,7 +823,7 @@ static VOID DEDPoll(int Port)
 				}
 
 				Poll[1] = 0;			// Data
-				TNC->Streams[Stream].BytesTXed += datalen;
+				TNC->Streams[Stream].bytesTXed += datalen;
 
 				Poll[2] = datalen - 1;
 				memcpy(&Poll[3], Buffer, datalen);
@@ -1508,7 +1506,7 @@ static VOID ProcessDEDFrame(struct TNCINFO * TNC)
 				STREAM->Connected = TRUE;			// Subsequent data to data channel
 				STREAM->Connecting = FALSE;
 
-				STREAM->BytesRXed = STREAM->BytesTXed = 0;
+				STREAM->bytesRXed = STREAM->bytesTXed = 0;
 
 				memcpy(MHCall, Call, 9);
 				MHCall[9] = 0;
@@ -1677,7 +1675,7 @@ static VOID ProcessDEDFrame(struct TNCINFO * TNC)
 		if (buffptr == NULL) return;			// No buffers, so ignore
 			
 		buffptr->Len = framelen;				// Length
-		TNC->Streams[Stream].BytesRXed += buffptr->Len;
+		TNC->Streams[Stream].bytesRXed += buffptr->Len;
 		memcpy(buffptr->Data, Msg, buffptr->Len);
 		
 		C_Q_ADD(&TNC->Streams[Stream].PACTORtoBPQ_Q, buffptr);

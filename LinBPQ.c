@@ -21,7 +21,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #define _CRT_SECURE_NO_DEPRECATE
 
-#include "CHeaders.h"
+#include "cheaders.h"
 #include "bpqmail.h"
 #ifdef WIN32
 #include <Iphlpapi.h>
@@ -45,7 +45,11 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 BOOL APIENTRY Rig_Init();
 
-void GetSemaphore(struct SEM * Semaphore, int ID);
+
+
+#define GetSemaphore(Semaphore,ID) _GetSemaphore(Semaphore, ID, __FILE__, __LINE__)
+
+void _GetSemaphore(struct SEM * Semaphore, int ID, char * File, int Line);
 void FreeSemaphore(struct SEM * Semaphore);
 VOID CopyConfigFile(char * ConfigName);
 VOID SendMailForThread(VOID * Param);
@@ -75,7 +79,10 @@ int upnpClose();
 void SaveAIS();
 void initAIS();
 void DRATSPoll();
+void RHPPoll();
+
 VOID GetPGConfig();
+void SendBBSDataToPktMap();
 
 extern uint64_t timeLoadedMS;
 
@@ -370,7 +377,51 @@ BOOL CtrlHandler(DWORD fdwCtrlType)
 
 #else
 
+#include <execinfo.h>
+#include <signal.h>
+
 // Linux Signal Handlers
+static void segvhandler(int sig)
+{
+    void *array[10];
+    size_t size;
+    char msg[] = "\nSIGSEGV Received\n";
+
+    write(STDERR_FILENO, msg, strlen(msg));
+
+    // get void*'s for all entries on the stack
+    size = backtrace(array, 10);
+
+    // print out all the frames to stderr
+
+    backtrace_symbols_fd(array, size, STDERR_FILENO);
+
+    write(STDOUT_FILENO, msg, strlen(msg));
+    backtrace_symbols_fd(array, size, STDOUT_FILENO);
+
+    exit(1);
+}
+
+static void abrthandler(int sig)
+{
+    void *array[10];
+    size_t size;
+    char msg[] = "\nSIGABRT Received\n";
+
+    write(STDERR_FILENO, msg, strlen(msg));
+    write(STDOUT_FILENO, msg, strlen(msg));
+
+    // get void*'s for all entries on the stack
+
+    size = backtrace(array, 10);
+    backtrace_symbols_fd(array, size, STDERR_FILENO);
+
+    write(STDOUT_FILENO, msg, strlen(msg));
+    backtrace_symbols_fd(array, size, STDOUT_FILENO);
+
+    exit(1);
+}
+
 
 static void sigterm_handler(int sig)
 {
@@ -460,9 +511,10 @@ VOID MonitorThread(void * x)
 		{
 			// It is stuck - try to release
 
-			Debugprintf ("Semaphore locked - Process ID = %d, Held By %d",
-				Semaphore.SemProcessID, SemHeldByAPI);
-
+			Debugprintf ("Semaphore locked - Process ID = %d, Held By %d from %s Line %d",
+					Semaphore.SemProcessID, SemHeldByAPI, Semaphore.File, Semaphore.Line);
+			
+	
 			Semaphore.Flag = 0;
 		}
 
@@ -552,6 +604,8 @@ extern int POP3Timer;
 // Console Terminal Stuff
 
 #ifndef WIN32
+
+
 
 #define _getch getchar
 
@@ -666,7 +720,7 @@ void ConTermPoll()
 
 		// Replace CR with CRLF
 
-			printf(ptr);
+			printf("%s", ptr);
 
 			if (ptr2)
 				printf("\r\n");
@@ -716,7 +770,7 @@ void ConTermPoll()
 
 }
 
-#include "getopt.h"
+#include <getopt.h>
 
 static struct option long_options[] =
 {
@@ -736,6 +790,12 @@ char HelpScreen[] =
 	"-v                                Show version and exit\n";
 	
 int Redirected = 0;
+
+static void segvhandler(int sig);
+static void abrthandler(int sig);
+
+void GetRestartData();
+
 
 int main(int argc, char * argv[])
 {
@@ -766,6 +826,10 @@ int main(int argc, char * argv[])
 	}
 
 #else
+
+	signal(SIGSEGV, segvhandler);
+	signal(SIGABRT, abrthandler);
+
 	setlinebuf(stdout);
 	struct sigaction act;
  	openlog("LINBPQ", LOG_PID, LOG_DAEMON);
@@ -815,7 +879,7 @@ int main(int argc, char * argv[])
 			 {
 			 case 'h':
 
-				 printf(HelpScreen);
+				 printf("%s", HelpScreen);
 				 exit (0);
 
 			 case 'l':
@@ -1119,6 +1183,8 @@ int main(int argc, char * argv[])
 		chmod(MailDir, S_IRWXU | S_IRWXG | S_IRWXO);
 #endif
 
+
+
 		// Make backup copies of Databases
 
 		//	CopyConfigFile(ConfigName);
@@ -1140,6 +1206,7 @@ int main(int argc, char * argv[])
 		GetBadWordFile();
 		GetHTMLForms();
 		GetPGConfig();
+		GetRestartData();
 
 		// Make sure there is a user record for the BBS, with BBS bit set.
 
@@ -1269,6 +1336,7 @@ int main(int argc, char * argv[])
 				}
 			}
 			for (i = optind; i < argc; i++)
+
 			{
 				if (_stricmp(argv[i], "tidymail") == 0)
 					DeleteRedundantMessages();
@@ -1280,6 +1348,10 @@ int main(int argc, char * argv[])
 			printf("Mail Started\n");
 			Logprintf(LOG_BBS, NULL, '!', "Mail Starting");
 
+			APIClock = 0;
+
+			SendBBSDataToPktMap();
+
 		}
 	}
 
@@ -1287,6 +1359,10 @@ int main(int argc, char * argv[])
 		InitializeTNCEmulator();
 
 	AGWActive = AGWAPIInit();
+
+	if (Redirected == 0)
+		ConTerm.BPQStream = FindFreeStream();
+
 
 #ifndef WIN32
 
@@ -1378,6 +1454,7 @@ int main(int argc, char * argv[])
 				SaveMessageDatabase();
 				SaveBIDDatabase();
 				SaveConfig(ConfigName);
+				SaveRestartData();
 			}
 
 			KEEPGOING--;					// Give time for links to close
@@ -1523,6 +1600,7 @@ int main(int argc, char * argv[])
 			Poll_AGW();
 
 		DRATSPoll();
+		RHPPoll();
 
 		HTTPTimer();
 
@@ -1573,6 +1651,13 @@ int main(int argc, char * argv[])
 					Debugprintf("|Enter HouseKeeping");
 					DoHouseKeeping(FALSE);
 				}
+
+				if (APIClock < NOW)
+				{
+					SendBBSDataToPktMap();
+					APIClock = NOW + 7200;			// Every 2 hours
+				}
+
 
 				tm = gmtime(&NOW);
 

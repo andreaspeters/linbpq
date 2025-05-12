@@ -67,7 +67,7 @@ struct PORTCONFIG
 	char Pad2[10];			// 246
 	char VALIDCALLS[256];	//   256 - 512
 	struct WL2KInfo * WL2K;			// 512
-	char SerialPortName[80]; // 516
+	char * SerialPortName; // 516
 	struct XDIGI * XDIGIS;	//  596 Cross port digi setup
 	int RIGPORT;			// Linked port with RigControl 
 	unsigned int PERMITTEDAPPLS;	// Appls allowed on this port
@@ -165,6 +165,18 @@ struct CONFIGTABLE
 	struct ROUTECONFIG C_ROUTE[MaxLockedRoutes];
 	struct APPLCONFIG C_APPL[NumberofAppls];
 	struct PORTCONFIG C_PORT[MaxBPQPortNo + 4];
+	int C_MQTT;
+	char C_MQTT_HOST[80];
+	int C_MQTT_PORT;
+	char C_MQTT_USER[80];
+	char C_MQTT_PASS[80];
+	int C_L4Compress;
+	int C_L4CompMaxframe;
+	int C_L4CompPaclen;
+	int C_L2Compress;
+	int C_L2CompMaxframe;
+	int C_L2CompPaclen;
+
 
 //#define ApplOffset 80000			// Applications offset in config buffer
 //#define InfoOffset 85000			// Infomsg offset in  buffer

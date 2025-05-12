@@ -31,7 +31,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #pragma data_seg("_BPQDATA")
 				
-#include "CHeaders.h"
+#include "cheaders.h"
 #include "tncinfo.h"
 
 //	MSGFLAG contains CMD/RESPONSE BITS
@@ -59,7 +59,6 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 
 #define	NODES_SIG	0xFF
 
-char * strlop(char * buf, char delim);
 UCHAR * DisplayINP3RIF(UCHAR * ptr1, UCHAR * ptr2, unsigned int msglen);
 
 char * DISPLAY_NETROM(MESSAGE * ADJBUFFER, UCHAR * Output, int MsgLen);
@@ -536,6 +535,16 @@ KC6OAR*>ID:
 
 					Output += sprintf((char *)Output, " RX Window=%d", value);
 					break;
+
+				case 16:
+
+					Output += sprintf((char *)Output, " Can Compress");
+					break;
+
+				case 17:
+
+					Output += sprintf((char *)Output, " Compress ok");
+					break;
 				}
 			}	
 		}
@@ -552,6 +561,15 @@ KC6OAR*>ID:
 
 		switch (ADJBUFFER->PID)
 		{
+		case 0xF1:
+		case 0xF2:
+
+			//	Compressed L2 Data
+
+		Output += sprintf((char *)Output, " <%d Bytes of Compressed L2 Data>", MsgLen - (19 + sizeof(void *)));
+
+		break;
+
 		case 0xF0:		// Normal Data
 		{
 			char Infofield[257];
@@ -729,6 +747,10 @@ char * DISPLAY_NETROM(MESSAGE * ADJBUFFER, UCHAR * Output, int MsgLen)
 
 		return Output + sprintf((char *)Output, " <DISC ACK>");
 
+	case L4RESET:
+
+		return Output + sprintf((char *)Output, " <RESET>");
+
 	case L4INFO:
 		{
 			char Infofield[257];
@@ -747,6 +769,9 @@ char * DISPLAY_NETROM(MESSAGE * ADJBUFFER, UCHAR * Output, int MsgLen)
 			if (Flags & L4MORE)
 				*(Output++) = 'M';
 	
+			if (Flags & L4COMP)
+				*(Output++) = 'C';
+
 			MsgLen = MsgLen - (19 + sizeof(void *));
 
 			if (MsgLen < 0 || MsgLen > 257)

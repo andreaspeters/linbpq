@@ -37,7 +37,7 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 #include <stdio.h>
 #include <time.h>
 
-#include "CHeaders.h"
+#include "cheaders.h"
 #include "tncinfo.h"
 
 #include "bpq32.h"
@@ -62,7 +62,7 @@ void ConnecttoUZ7HOThread(void * portptr);
 void CreateMHWindow();
 int Update_MH_List(struct in_addr ipad, char * call, char proto);
 
-int ConnecttoUZ7HO();
+int ConnecttoUZ7HO(int port);
 static int ProcessReceivedData(int bpqport);
 static int ProcessLine(char * buf, int Port);
 int KillTNC(struct TNCINFO * TNC);
@@ -374,7 +374,7 @@ int UZ7HOSetFreq(int port, struct TNCINFO * TNC, struct AGWINFO * AGW, PDATAMESS
 	{
 		// Read Freq
 
-		buffptr->Len = sprintf((UCHAR *)&buffptr->Data[0], "UZ7HO} Modem Freqency %d\r", AGW->CenterFreq);
+		buffptr->Len = sprintf((UCHAR *)&buffptr->Data[0], "UZ7HO} Modem Frequency %d\r", AGW->CenterFreq);
 		return 1;
 	}
 
@@ -884,6 +884,7 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 
 			if (STREAM->ReportDISC)
 			{
+				hookL4SessionDeleted(TNC, STREAM);
 				STREAM->ReportDISC = FALSE;
 				buff->PORT = Stream;
 
@@ -1022,8 +1023,12 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 
 			if (_memicmp(&buff->L2DATA[0], "RADIO ", 6) == 0)
 			{
-				sprintf(&buff->L2DATA[0], "%d %s", TNC->Port, &buff->L2DATA[6]);
+				char cmd[56];
 
+				strcpy(cmd, &buff->L2DATA[6]);
+				sprintf(&buff->L2DATA[0], "%d %s", TNC->Port, cmd);
+
+	
 				if (Rig_Command(TNC->PortRecord->ATTACHEDSESSIONS[0]->L4CROSSLINK, &buff->L2DATA[0]))
 				{
 				}
@@ -1229,6 +1234,9 @@ static size_t ExtProc(int fn, int port, PDATAMESSAGE buff)
 					ViaList[0] = Digis;
 				}
 
+				hookL4SessionAttempt(STREAM,&STREAM->AGWKey[1], &STREAM->AGWKey[11]);
+
+
 				sent = send(TNCInfo[MasterPort[port]]->TCPSock, (char *)&AGW->TXHeader, AGWHDDRLEN, 0);
 				if (Digis)
 					send(TNCInfo[MasterPort[port]]->TCPSock, ViaList, Digis * 10 + 1, 0);
@@ -1396,7 +1404,7 @@ void * UZ7HOExtInit(EXTPORTDATA * PortEntry)
 	ptr=strchr(TNC->NodeCall, ' ');
 	if (ptr) *(ptr) = 0;					// Null Terminate
 
-	TNC->Hardware = H_UZ7HO;
+	TNC->PortRecord->PORTCONTROL.HWType = TNC->Hardware = H_UZ7HO;
 
 	UZ7HOChannel[port] = PortEntry->PORTCONTROL.CHANNELNUM-65;
 	
@@ -2230,6 +2238,8 @@ VOID ProcessAGWPacket(struct TNCINFO * TNC, UCHAR * Message)
 				buffptr->Len  = RXHeader->DataLength;
 				memcpy(buffptr->Data, Message, RXHeader->DataLength);
 
+				STREAM->bytesRXed += RXHeader->DataLength;
+
 				C_Q_ADD(&STREAM->PACTORtoBPQ_Q, buffptr);
 				return;
 			}
@@ -2291,7 +2301,7 @@ VOID ProcessAGWPacket(struct TNCINFO * TNC, UCHAR * Message)
 
 		//		if (STREAM->Disconnecting)		// 
 		//			ReleaseTNC(TNC);
-
+		
 				STREAM->Disconnecting = FALSE;
 				STREAM->DiscWhenAllSent = 10;
 				STREAM->FramesOutstanding = 0;
@@ -2370,7 +2380,7 @@ GotStream:
 			memcpy(STREAM->AGWKey, Key, 21);
 			STREAM->Connected = TRUE;
 			STREAM->ConnectTime = time(NULL); 
-			STREAM->BytesRXed = STREAM->BytesTXed = 0;
+			STREAM->bytesRXed = STREAM->bytesTXed = 0;
 
 			SuspendOtherPorts(TNC);
 
@@ -2467,11 +2477,13 @@ GotStream:
 
 				}
 
+				strcpy(STREAM->MyCall, TNC->TargetCall);
+
 				if (App < 32)
 				{
 					char AppName[13];
 
-					memcpy(AppName, &ApplPtr[App * sizeof(CMDX)], 12);
+					memcpy(AppName, &ApplPtr[App * sizeof(struct CMDX)], 12);
 					AppName[12] = 0;
 
 					// Make sure app is available
@@ -2502,6 +2514,9 @@ GotStream:
 					return;
 				}
 			}
+
+			strcpy(STREAM->MyCall, TNC->TargetCall);
+
 		
 			// Not to a known appl - drop through to Node
 
@@ -2526,7 +2541,7 @@ GotStream:
 					STREAM->Connected = TRUE;
 					STREAM->Connecting = FALSE;
 					STREAM->ConnectTime = time(NULL); 
-					STREAM->BytesRXed = STREAM->BytesTXed = 0;
+					STREAM->bytesRXed = STREAM->bytesTXed = 0;
 
 					buffptr = GetBuff();
 					if (buffptr == 0) return;			// No buffers, so ignore
@@ -2740,7 +2755,7 @@ GotStream:
 		// Capabilities - along with Version used to indicate QtSoundModem
 		// with ability to set and read Modem type and frequency/
 
-		if (Message[2] == 24 && Message[3] == 3 && Message[4] == 100)
+		if ((Message[2] == 24 && Message[3] == 3 && Message[4] == 100) || TNC->AGWInfo->isQTSM)
 		{
 			// Set flag on any other ports on same TNC (all ports with this as master port)
 
@@ -2927,6 +2942,9 @@ VOID SendData(int Stream, struct TNCINFO * TNC, char * Key, char * Msg, int MsgL
 	AGW->TXHeader.DataKind='D';
 	memcpy(AGW->TXHeader.callfrom, &Key[11], 10);
 	memcpy(AGW->TXHeader.callto, &Key[1], 10);
+
+	TNC->Streams[Stream].bytesTXed += MsgLen;
+
 
 	// If Length is greater than Paclen we should fragment
 
