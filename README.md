@@ -15,6 +15,9 @@ Right now I've deleted:
 - SDRANGEL
 - RTLSDR
 - WinmorControl
+- UPNP
+- MiniDLNA
+- NNTP
 
 
 ## How to compile

@@ -1402,8 +1402,6 @@ int main(int argc, char * argv[])
 	if (IPActive)
 		IPClose();
 
-	upnpClose();
-
 	// Close any open logs
 
 	for (i = 0; i < 4; i++)

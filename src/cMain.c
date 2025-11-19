@@ -1542,8 +1542,6 @@ BOOL Start()
 
 	GetPortCTEXT(0, 0, 0, 0);
 
-	upnpInit();
-
 	lastSaveSecs = CurrentSecs = lastSlowSecs = time(NULL);
 
 	return 0;
