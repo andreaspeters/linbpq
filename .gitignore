@@ -2,3 +2,4 @@
 linbpq
 *.d
 *.o
+src/.ccls-cache

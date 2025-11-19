@@ -1,10 +1,20 @@
-# unofficial LinBPQ
+# LinBPQ Lite
 
-This is a fork of the original LinBPQ (git://vps1.g8bpq.net/linbpq). This fork
-is primarily for understanding purpose, to keep track of the original code and
-in worstcase also to Maintain the software.
+This is a hard fork of the original LinBPQ (git://vps1.g8bpq.net/linbpq) V23.
 
-I use my own version numbers. So don't get confused. :-)
+The reason for this fork is to reduce LinBPQ to Node and Convers functionality.
+
+Right now I've deleted:
+
+- BBS
+- AIS
+- BPQTerm
+- PNG Encode/Decode
+- MQTT
+- FLDIGI
+- SDRANGEL
+- RTLSDR
+- WinmorControl
 
 
 ## How to compile
