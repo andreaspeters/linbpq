@@ -97,9 +97,7 @@ BOOL ProcessConfig();
 int ProcessAISMessage(char * msg, int len);
 int read_png(unsigned char *bytes);
 VOID sendandcheck(SOCKET sock, const char * Buffer, int Len);
-void SaveAPRSMessage(struct APRSMESSAGE * ptr);
 void ClearSavedMessages();
-void GetSavedAPRSMessages();
 static VOID GPSDConnect(void * unused);
 int CanPortDigi(int Port);
 int FromLOC(char * Locator, double * pLat, double * pLon);
@@ -976,9 +974,6 @@ Dll BOOL APIENTRY Init_APRS()
 	APRSWeb = TRUE;
 
 	// Reload saved messages
-
-	if (SaveAPRSMsgs)
-		GetSavedAPRSMessages();
 
 	// If a Run parameter was supplied, run the program
 
@@ -5249,13 +5244,7 @@ int DecodeAPRSPayload(char * Payload, struct STATIONRECORD * Station)
 	case '<':				// Capabilities
 	case '_':				// Weather
 	case 'T':				// Telemetry
-
 		break;
-
-	case ':':				// Message
-
-		return ProcessMessage(Payload, Station);
-
 	case '}':			// Third Party Header
 			
 		// Process Payload as a new message
@@ -7199,32 +7188,15 @@ VOID APRSSendMessageFile(struct APRSConnectionInfo * sockptr, char * FN)
 		// Try normal pages
 
 
-		if (strcmp(FN, "/") == 0)
-			sprintf_s(MsgFile, sizeof(MsgFile), "%s/%s/%s/index.html", BPQDirectory, APRSDir, HTDocs);
-		else
-			sprintf_s(MsgFile, sizeof(MsgFile), "%s/%s/%s%s", BPQDirectory,APRSDir, HTDocs, &FN[5]);
+  	sprintf_s(MsgFile, sizeof(MsgFile), "%s/%s/%s%s", BPQDirectory,APRSDir, HTDocs, &FN[5]);
 	
 		// My standard page set is now hard coded
-
-
-
-		MsgBytes = SaveMsgBytes = GetStandardPage(&FN[6], &FileSize);
-
-		if (MsgBytes)
+		hFile = fopen(MsgFile, "rb");
+    		if (hFile == NULL)
 		{
-			if (FileSize == 0)
-				FileSize = strlen(MsgBytes);
-		}
-		else
-		{
-			hFile = fopen(MsgFile, "rb");
-
-			if (hFile == NULL)
-			{
-				HeaderLen = sprintf(Header, "HTTP/1.1 404 Not Found\r\nContent-Length: 16\r\n\r\nPage not found\r\n");
-				send(sockptr->sock, Header, HeaderLen, 0); 
-				return;
-			}
+			HeaderLen = sprintf(Header, "HTTP/1.1 404 Not Found\r\nContent-Length: 16\r\n\r\nPage not found\r\n");
+			send(sockptr->sock, Header, HeaderLen, 0);
+			return;
 		}
 	}
 	else
@@ -7778,204 +7750,6 @@ VOID APRSProcessHTTPMessage(SOCKET sock, char * MsgPtr,	BOOL LOCAL, BOOL COOKIE)
 // Code for handling APRS messages within BPQ32/LinBPQ instead of GUI
 
 
-int ProcessMessage(char * Payload, struct STATIONRECORD * Station)
-{
-	char MsgDest[10];
-	struct APRSMESSAGE * Message;
-	struct APRSMESSAGE * ptr = SMEM->Messages;
-	char * TextPtr = &Payload[11];
-	char * SeqPtr;
-	int n = 0;
-	char FromCall[10] = "         ";
-	struct tm * TM;
-	time_t NOW;
-	char noSeq[] = "";
-	int ourMessage = 0;
-
-	memcpy(FromCall, Station->Callsign, strlen(Station->Callsign));
-	memcpy(MsgDest, &Payload[1], 9);
-	MsgDest[9] = 0;
-
-	if (strcmp(MsgDest, CallPadded) == 0)		// to me?
-	{
-		SMEM->NeedRefresh = 255;				// Flag to control Msg popup
-		ourMessage = 1;
-	}
-	else
-		SMEM->NeedRefresh = 1;
-
-	SeqPtr = strchr(TextPtr, '{');
-
-	if (SeqPtr)
-	{
-		*(SeqPtr++) = 0;
-		if(strlen(SeqPtr) > 6)
-			SeqPtr[7] = 0;	
-	}
-	else
-		SeqPtr = noSeq;
-
-	if (_memicmp(TextPtr, "ack", 3) == 0)
-	{
-		// Message Ack. See if for one of our messages
-
-		ptr = SMEM->OutstandingMsgs;
-
-		if (ptr == 0)
-			return ourMessage;
-
-		do
-		{
-			if (strcmp(ptr->FromCall, MsgDest) == 0
-				&& strcmp(ptr->ToCall, FromCall) == 0
-				&& strcmp(ptr->Seq, &TextPtr[3]) == 0)
-			{
-				// Message is acked
-
-				ptr->Retries = 0;
-				ptr->Acked = TRUE;
-
-				return ourMessage;
-			}
-			ptr = ptr->Next;
-			n++;
-
-		} while (ptr);
-	
-		return ourMessage;
-	}
-
-	// See if we already have this message
-
-	ptr = SMEM->Messages;
-
-	while(ptr)
-	{
-		if (strcmp(ptr->ToCall, MsgDest) == 0
-			&& strcmp(ptr->FromCall, FromCall) == 0
-			&& strcmp(ptr->Seq, SeqPtr) == 0
-			&& strcmp(ptr->Text, TextPtr) == 0)
-		
-			// Duplicate
-
-			return ourMessage;
-
-		ptr = ptr->Next;
-	}
-
-	Message = APRSGetMessageBuffer();
-
-	if (Message == NULL)
-		return ourMessage;
-
-	memset(Message, 0, sizeof(struct APRSMESSAGE));
-	memset(Message->FromCall, ' ', 9);
-	memcpy(Message->FromCall, Station->Callsign, strlen(Station->Callsign));
-	strcpy(Message->ToCall, MsgDest);
-
-	if (SeqPtr)
-	{
-		strcpy(Message->Seq, SeqPtr);
-
-		// If a REPLY-ACK Seg, copy to LastRXSeq, and see if it acks a message
-
-		if (SeqPtr[2] == '}')
-		{
-			struct APRSMESSAGE * ptr1;
-			int nn = 0;
-
-			strcpy(Station->LastRXSeq, SeqPtr);
-
-			ptr1 = SMEM->OutstandingMsgs;
-
-			while (ptr1)
-			{
-				if (strcmp(ptr1->FromCall, MsgDest) == 0
-					&& strcmp(ptr1->ToCall, FromCall) == 0
-					&& memcmp(&ptr1->Seq, &SeqPtr[3], 2) == 0)
-				{
-					// Message is acked
-
-					ptr1->Acked = TRUE;
-					ptr1->Retries = 0;
-					
-					break;
-				}
-				ptr1 = ptr1->Next;
-				nn++;
-			}
-		}
-		else
-		{
-			// Station is not using reply-ack - set to send simple numeric sequence (workround for bug in APRS Messanges
-		
-			Station->SimpleNumericSeq = TRUE;
-		}
-	}
-
-	if (strlen(TextPtr) > 100)
-		TextPtr[100] = 0;
-
-	strcpy(Message->Text, TextPtr);
-		
-	NOW = time(NULL);
-
-	if (DefaultLocalTime)
-		TM = localtime(&NOW);
-	else
-		TM = gmtime(&NOW);
-					
-	sprintf(Message->Time, "%.2d:%.2d", TM->tm_hour, TM->tm_min);
-
-	if (_stricmp(MsgDest, CallPadded) == 0 && SeqPtr)	// ack it if it has a sequence
-	{
-		// For us - send an Ack
-
-		char ack[30];
-		APRSHEARDRECORD * STN;
-		
-		sprintf(ack, ":%-9s:ack%s", Message->FromCall, Message->Seq);
-
-		if (memcmp(Message->FromCall, "SERVER   ", 9) == 0)
-		{
-			SendAPRSMessage(ack, 0);			// IS
-		}
-		else
-		{
-			STN = FindStationInMH(Message->ToCall);
-
-			if (STN)
-				SendAPRSMessage(ack, STN->rfPort);
-			else
-			{
-				SendAPRSMessage(ack, -1);			// All RF ports
-				SendAPRSMessage(ack, 0);			// IS
-			}
-		}
-	}
-
-	if (SaveAPRSMsgs)
-		SaveAPRSMessage(Message);
-
-	ptr = SMEM->Messages;
-
-	if (ptr == NULL)
-	{
-		SMEM->Messages = Message;
-	}
-	else
-	{
-		n++;
-		while(ptr->Next)
-		{
-			ptr = ptr->Next;
-			n++;
-		}
-		ptr->Next = Message;
-	}
-
-	return ourMessage;
-}
 
 BOOL InternalSendAPRSMessage(char * Text, char * Call)
 {
@@ -8921,34 +8695,6 @@ static void png_flush(png_structp png_ptr)
 {
 }
 
-void SaveAPRSMessage(struct APRSMESSAGE * ptr)
-{
-	// Save messages in case of a restart
-
-	char FN[250];
-	FILE *file;
-
-	// Set up filename
-
-	if (BPQDirectory[0] == 0)
-	{
-		strcpy(FN,"APRSMsgs.dat");
-	}
-	else
-	{
-		strcpy(FN,BPQDirectory);
-		strcat(FN,"/");
-		strcat(FN,"APRSMsgs.dat");
-	}
-
-	if ((file = fopen(FN, "a")) == NULL)
-		return ;
-
-	fprintf(file, "%d %s,%s,%s,%s,%s\n", time(NULL), ptr->FromCall, ptr->ToCall, ptr->Seq, ptr->Time, ptr->Text);
-
-	fclose(file);
-}
-
 void ClearSavedMessages()
 {
 	char FN[250];
@@ -8973,80 +8719,4 @@ void ClearSavedMessages()
 	fclose(file);
 }
 
-void GetSavedAPRSMessages()
-{
-	// Get Saved messages 
 
-	// 1668768157 SERVER   ,GM8BPQ-2 ,D7Yx,10:42,filter m/200 active
-
-	char FN[250];
-	FILE *file;
-	struct APRSMESSAGE * Message;
-	struct APRSMESSAGE * ptr;
-	char Line[512];
-	char * Stamp = 0;
-	char * From = 0;
-	char * To = 0;
-	char * Seq = 0;
-	char * Time = 0;
-	char * Text = 0;
-
-	// Set up filename
-
-	if (BPQDirectory[0] == 0)
-	{
-		strcpy(FN,"APRSMsgs.dat");
-	}
-	else
-	{
-		strcpy(FN,BPQDirectory);
-		strcat(FN,"/");
-		strcat(FN,"APRSMsgs.dat");
-	}
-
-	if ((file = fopen(FN, "r")) == NULL)
-		return ;
-
-	while (fgets(Line, sizeof(Line), file))
-	{
-		Stamp = Line;
-		From = strlop(Stamp, ' ');
-		To = strlop(From, ',');
-		Seq = strlop(To, ',');
-		Time = strlop(Seq, ',');
-		Text = strlop(Time, ',');
-
-		if (Stamp && From && To && Seq && Time && Text)
-		{
-			Message = APRSGetMessageBuffer();
-
-			if (Message == NULL)
-				break;
-
-			memset(Message, 0, sizeof(struct APRSMESSAGE));
-
-			strcpy(Message->FromCall, From);
-			strcpy(Message->ToCall, To);
-			strcpy(Message->Seq, Seq);
-			strcpy(Message->Time, Time);
-			strcpy(Message->Text, Text);
-
-			ptr = SMEM->Messages;
-
-			if (ptr == NULL)
-			{
-				SMEM->Messages = Message;
-			}
-			else
-			{
-				while(ptr->Next)
-				{
-					ptr = ptr->Next;
-				}
-				ptr->Next = Message;
-			}
-
-		}
-	}
-	fclose(file);
-}

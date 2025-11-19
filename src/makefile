@@ -3,7 +3,7 @@
 #	To exclude i2c support run make noi2c
 
 OBJS =  APRSIconData.o \
- upnp.o APRSStdPages.o HSMODEM.o WinRPR.o KISSHF.o TNCEmulators.o bpqhdlc.o SerialPort.o\
+ upnp.o HSMODEM.o WinRPR.o KISSHF.o TNCEmulators.o bpqhdlc.o SerialPort.o\
  adif.o utf8Routines.o VARA.o LzFind.o Alloc.o LzmaDec.o LzmaEnc.o LzmaLib.o \
  ARDOP.o IPCode.o linether.o CMSAuth.o APRSCode.o BPQtoAGW.o KAMPactor.o\
  AEAPactor.o HALDriver.o MULTIPSK.o ChatHTMLConfig.o bpqaxip.o\
