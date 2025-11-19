@@ -7015,7 +7015,7 @@ VOID SHOWTELNET(TRANSPORTENTRY * Session, char * Bufferptr, char * CmdTail, stru
 	struct PORTCONTROL * PORT = NULL;
 	int txlen = 0, n;
 	struct TNCINFO * TNC;
-	char msg[80];
+	char msg[120];
 	struct ConnectionInfo * sockptr;
 	int i;
 	char CMS[] = "CMS Disabled";
@@ -7070,7 +7070,7 @@ VOID SHOWTELNET(TRANSPORTENTRY * Session, char * Bufferptr, char * CmdTail, stru
 					Tel_Format_Addr(sockptr, Addr);
 
 					if (sockptr->WebSocks)
-						sprintf(msg, "Websock From %s", Addr);
+						snprintf(msg, sizeof(msg), "Websock From %s", Addr);
 					else
 						sprintf(msg, "HTTP From %s", Addr);
 

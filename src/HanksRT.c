@@ -4530,7 +4530,7 @@ void ChatWriteLogLine(ChatCIRCUIT * conn, int Flag, char * Msg, int MsgLen, int 
 	if (conn && conn->Callsign[0])
 	{
 		char call[20];
-		sprintf(call, "%s          ", conn->Callsign);
+		snprintf(call, sizeof(call), "%s         ", conn->Callsign);
 		fwrite(call, 1, 10, LogHandle[Flags]);
 	}
 	else

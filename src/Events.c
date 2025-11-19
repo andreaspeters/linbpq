@@ -157,7 +157,7 @@ void hookL2SessionDeleted(struct _LINKTABLE * LINK)
 				LINK->LINKPORT->PORTNUMBER, LINK->callingCall, LINK->receivingCall, sessionTime, LINK->bytesTXed, avBytesSent, LINK->bytesRXed, avBytesRXed, timestamp);
 
 
-			sprintf(Msg, "{\"mode\": \"%s\", \"direction\": \"%s\", \"port\": %d, \"callfrom\": \"%s\", \"callto\": \"%s\", \"time\": %d,  \"bytesSent\": %d," 
+			sprintf(Msg, "{\"mode\": \"%s\", \"direction\": \"%s\", \"port\": %d, \"callfrom\": \"%s\", \"callto\": \"%s\", \"time\": %ld,  \"bytesSent\": %d," 
 				"\"BPMSent\": %4.2f, \"BytesReceived\": %d,  \"BPMReceived\": %4.2f, \"timestamp\": \"%s\"}",
 				"KISS", LINK->Direction, LINK->LINKPORT->PORTNUMBER, LINK->callingCall, LINK->receivingCall, sessionTime,
 				LINK->bytesTXed,  avBytesSent, LINK->bytesRXed, avBytesRXed, timestamp);
@@ -225,7 +225,7 @@ void hookL4SessionDeleted(struct TNCINFO * TNC, struct STREAMINFO * STREAM)
 		if (sessionTime == 0)
 			sessionTime = 1;				// Or will get divide by zero error 
  
-		sprintf(Msg, "{\"mode\": \"%s\", \"direction\": \"%s\", \"port\": %d, \"callfrom\": \"%s\", \"callto\": \"%s\", \"time\": %d,  \"bytesSent\": %d," 
+		sprintf(Msg, "{\"mode\": \"%s\", \"direction\": \"%s\", \"port\": %d, \"callfrom\": \"%s\", \"callto\": \"%s\", \"time\": %ld,  \"bytesSent\": %d," 
 			"\"BPMSent\": %4.2f, \"BytesReceived\": %d,  \"BPMReceived\": %4.2f, \"timestamp\": \"%s\"}",
 			Modenames[TNC->Hardware - 1], STREAM->Direction, TNC->Port, STREAM->callingCall, STREAM->receivingCall, sessionTime,
 			STREAM->bytesTXed,  avBytesSent, STREAM->bytesRXed, avBytesRXed, timestamp);

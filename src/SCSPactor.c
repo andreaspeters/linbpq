@@ -2080,7 +2080,7 @@ VOID SCSPoll(int Port)
 			{
 				CheckMode(TNC);
 
-				buffptr->Len = sprintf(buffptr->Data, "%s\r", &TNC->RXBuffer[2]);		
+				buffptr->Len = snprintf(buffptr->Data, sizeof(buffptr->Data), "%s\r", &TNC->RXBuffer[2]);
 				C_Q_ADD(&TNC->Streams[Stream].PACTORtoBPQ_Q, buffptr);
 
 				return;
