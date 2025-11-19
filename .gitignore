@@ -3,3 +3,6 @@ linbpq
 *.d
 *.o
 src/.ccls-cache
+.ccls-cache
+*/**/.ccls-cache
+

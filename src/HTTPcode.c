@@ -48,7 +48,6 @@ extern int NUMBEROFNODES, MAXDESTS, L4CONNECTSOUT, L4CONNECTSIN, L4FRAMESTX, L4F
 extern int STATSTIME;
 extern  TRANSPORTENTRY * L4TABLE;
 extern BPQVECSTRUC BPQHOSTVECTOR[];
-extern BOOL APRSApplConnected;  
 extern char VersionString[];
 VOID FormatTime3(char * Time, time_t cTime);
 DllExport int APIENTRY Get_APPLMASK(int Stream);
@@ -61,12 +60,8 @@ VOID ARDOPAbort(struct TNCINFO * TNC);
 VOID WriteMiniDump();
 BOOL KillTNC(struct TNCINFO * TNC);
 BOOL RestartTNC(struct TNCINFO * TNC);
-int GetAISPageInfo(char * Buffer, int ais, int adsb);
-int GetAPRSPageInfo(char * Buffer, double N, double S, double W, double E, int aprs, int ais, int adsb);
 unsigned char * Compressit(unsigned char * In, int Len, int * OutLen);
 char * stristr (char *ch1, char *ch2);
-int GetAPRSIcon(unsigned char * _REPLYBUFFER, char * NodeURL);
-char * GetStandardPage(char * FN, int * Len);
 BOOL SHA1PasswordHash(char * String, char * Hash);
 char * byte_base64_encode(char *str, int len);
 int APIProcessHTTPMessage(char * response, char * Method, char * URL, char * request,	BOOL LOCAL, BOOL COOKIE);
@@ -91,12 +86,9 @@ extern COLORREF Colours[256];
 extern BOOL IncludesMail;
 extern BOOL IncludesChat;
 
-extern BOOL APRSWeb;  
 extern BOOL RigActive;
 
 extern HKEY REGTREE;
-
-extern BOOL APRSActive;
 
 extern UCHAR LogDirectory[];
 
@@ -120,8 +112,6 @@ int StatusProc(char * Buff);
 int ProcessMailSignon(struct TCPINFO * TCP, char * MsgPtr, char * Appl, char * Reply, struct HTTPConnectionInfo ** Session, BOOL WebMail, int LOCAL);
 int ProcessMailAPISignon(struct TCPINFO * TCP, char * MsgPtr, char * Appl, char * Reply, struct HTTPConnectionInfo ** Session, BOOL WebMail, int LOCAL);
 int ProcessChatSignon(struct TCPINFO * TCP, char * MsgPtr, char * Appl, char * Reply, struct HTTPConnectionInfo ** Session, int LOCAL);
-VOID APRSProcessHTTPMessage(SOCKET sock, char * MsgPtr, BOOL LOCAL, BOOL COOKIE);
-
 
 static struct HTTPConnectionInfo * SessionList;	// active term mode sessions
 
@@ -132,17 +122,10 @@ char CHATPipeFileName[] = "\\\\.\\pipe\\BPQCHATWebPipe";
 
 char Index[] = "<html><head><title>%s's BPQ32 Web Server</title></head><body><P align=center>"
 "<table border=2 cellpadding=2 cellspacing=2 bgcolor=white>"
-"<tr><td align=center><a href=/Node/NodeMenu.html>Node Pages</a></td>"
-"<td align=center><a href=/aprs>APRS Pages</a></td></tr></table></body></html>";
+"<tr><td align=center><a href=/Node/NodeMenu.html>Node Pages</a></td>";
 
 char IndexNoAPRS[] = "<meta http-equiv=\"refresh\" content=\"0;url=/Node/NodeIndex.html\">"
 "<html><head></head><body></body></html>";
-
-//char APRSBit[] = "<td><a href=../aprs>APRS Pages</a></td>";
-
-//char MailBit[] = "<td><a href=../Mail/Header>Mail Mgmt</a></td>"
-//				 "<td><a href=/Webmail>WebMail</a></td>";
-//char ChatBit[] = "<td><a href=../Chat/Header>Chat Mgmt</a></td>";
 
 char Tail[] = "</body></html>";
 
@@ -1101,9 +1084,6 @@ int SendMessageFile(SOCKET sock, char * FN, BOOL OnlyifExists, int allowDeflate)
 		}
 
 		if (strcmp(FN, "/") == 0)
-			if (APRSActive)
-				sprintf(MsgFile, "%s/HTML/index.html", BPQDirectory);
-			else
 				sprintf(MsgFile, "%s/HTML/indexnoaprs.html", BPQDirectory);
 		else
 			sprintf(MsgFile, "%s/HTML%s", BPQDirectory, FN);
@@ -1127,29 +1107,6 @@ int SendMessageFile(SOCKET sock, char * FN, BOOL OnlyifExists, int allowDeflate)
 			//	ctime = ft.LowPart;
 
 			FormatTime3(FileTimeString, STAT.st_ctime);
-		}
-		else
-		{
-			// See if it is a hard coded file
-
-			MsgBytes = GetStandardPage(&FN[1], &FileSize);
-
-			if (MsgBytes)
-			{
-				if (FileSize == 0)
-					FileSize = strlen(MsgBytes);
-
-				FormatTime3(FileTimeString, 0);
-			}
-			else
-			{
-				if (OnlyifExists)					// Set if we dont want an error response if missing
-					return -1;
-
-				Len = sprintf(Header, "HTTP/1.1 404 Not Found\r\nContent-Length: 16\r\n\r\nPage not found\r\n");
-				send(sock, Header, Len, 0);
-				return 0;
-			}
 		}
 
 		// if HTML file, look for ##...## substitutions
@@ -1381,11 +1338,6 @@ int SetupNodeMenu(char * Buff, int LOCAL)
 	char DriverBit[] = "<td><a href=\"javascript:open_win();\">Driver Windows</a></td>"
 		"<td><a href=javascript:dev_win(\"/Node/Streams\",820,700,200,200);>Stream Status</a></td>";
 
-	char APRSBit[] = "<td><a href=../aprs>APRS Pages</a></td>";
-
-	char MailBit[] = "<td><a href=../Mail/Header>Mail Mgmt</a></td>"
-		"<td><a href=/Webmail>WebMail</a></td>";
-
 	char ChatBit[] = "<td><a href=../Chat/Header>Chat Mgmt</a></td>";
 	char SigninBit[] = "<td><a href=/Node/Signon.html>SYSOP Signin</a></td>";
 
@@ -1399,8 +1351,6 @@ int SetupNodeMenu(char * Buff, int LOCAL)
 		"<script>"
 		"document.getElementById('e').value = new Date().toISOString().substring(0, 10);"
 		"</script></label>"
-		"<input type=submit class='btn' name='BBS' value='BBS Log'></br>"
-		"<input type=submit class='btn' name='Debug' value='BBS Debug Log'></br>"
 		"<input type=submit class='btn' name='Telnet' value='Telnet Log'></br>"
 		"<input type=submit class='btn' name='CMS' value='CMS Log'></br>"
 		"<input type=submit class='btn' name='Chat' value='Chat Log'></br>"
@@ -1425,10 +1375,7 @@ int SetupNodeMenu(char * Buff, int LOCAL)
 		}
 	}
 
-	Len += sprintf(&Buff[Len], NodeMenuRest, Mycall,
-		DriverBit,
-		(APRSWeb)?APRSBit:"",
-		(IncludesMail)?MailBit:"", (IncludesChat)?ChatBit:"", (LOCAL)?"":SigninBit, NodeTail);
+	Len += sprintf(&Buff[Len], NodeMenuRest, Mycall, DriverBit, "", "", (IncludesChat)?ChatBit:"", (LOCAL)?"":SigninBit, NodeTail);
 
 	return Len;
 }
@@ -1894,16 +1841,6 @@ int InnerProcessHTTPMessage(struct ConnectionInfo * conn)
 				return 0;
 			}
 		}
-
-
-		// APRS process internally
-
-		if (_memicmp(Context, "/APRS/", 6) == 0 || _stricmp(Context, "/APRS") == 0)
-		{
-			APRSProcessHTTPMessage(sock, MsgPtr, LOCAL, COOKIE);
-			return 0;
-		}
-
 
 		if (_stricmp(Context, "/Node/Signon?Node") == 0)
 		{
@@ -2596,10 +2533,7 @@ doHeader:
 				return 0;						// We've sent it
 			else
 			{	
-				if (APRSApplConnected)
-					ReplyLen = sprintf(_REPLYBUFFER, Index, Mycall, Mycall);
-				else
-					ReplyLen = sprintf(_REPLYBUFFER, IndexNoAPRS, Mycall, Mycall);
+				ReplyLen = sprintf(_REPLYBUFFER, IndexNoAPRS, Mycall, Mycall);
 
 				HeaderLen = sprintf(Header, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nContent-Type: text/html\r\n\r\n", ReplyLen + (int)strlen(Tail));
 				send(sock, Header, HeaderLen, 0);
@@ -2632,48 +2566,6 @@ doHeader:
 				Compressed = _REPLYBUFFER;
 
 			HeaderLen = sprintf(Header, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nContent-Type: Text\r\n%s\r\n", ReplyLen, Encoding);
-			sendandcheck(sock, Header, HeaderLen);
-			sendandcheck(sock, Compressed, ReplyLen);
-
-			if (allowDeflate)
-				free (Compressed);
-
-			return 0;
-		}
-
-		else if (_memicmp(NodeURL, "/aprsdata.txt", 13) == 0)
-		{
-			char * Compressed;
-			char * ptr;
-			double N, S, W, E;
-			int aprs = 1, ais = 1, adsb = 1;
-
-			ptr = &NodeURL[14];
-			
-			N = atof(ptr);
-			ptr = strlop(ptr, '|');
-			S = atof(ptr);
-			ptr = strlop(ptr, '|');
-			W = atof(ptr);
-			ptr = strlop(ptr, '|');
-			E = atof(ptr);
-			ptr = strlop(ptr, '|');	
-			if (ptr)
-			{
-			aprs = atoi(ptr);
-			ptr = strlop(ptr, '|');		
-			ais = atoi(ptr);
-			ptr = strlop(ptr, '|');		
-			adsb = atoi(ptr);
-			}
-			ReplyLen = GetAPRSPageInfo(_REPLYBUFFER, N, S, W, E, aprs, ais, adsb);
-
-			if (allowDeflate)
-				Compressed = Compressit(_REPLYBUFFER, ReplyLen, &ReplyLen);
-			else
-				Compressed = _REPLYBUFFER;
-
-			HeaderLen = sprintf(Header, "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: %d\r\nContent-Type: Text\r\n%s\r\n", ReplyLen, Encoding);
 			sendandcheck(sock, Header, HeaderLen);
 			sendandcheck(sock, Compressed, ReplyLen);
 
@@ -2727,31 +2619,6 @@ doHeader:
 				free (Compressed);
 
 			return 0;
-		}
-
-
-		else if (_memicmp(NodeURL, "/Icon", 5) == 0 && _memicmp(&NodeURL[10], ".png", 4) == 0)
-		{
-			// APRS internal Icon
-
-			char * Compressed;
-				
-			ReplyLen = GetAPRSIcon(_REPLYBUFFER, NodeURL);
-
-			if (allowDeflate)
-				Compressed = Compressit(_REPLYBUFFER, ReplyLen, &ReplyLen);
-			else
-				Compressed = _REPLYBUFFER;
-
-			HeaderLen = sprintf(Header, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nContent-Type: Text\r\n%s\r\n", ReplyLen, Encoding);
-			sendandcheck(sock, Header, HeaderLen);
-			sendandcheck(sock, Compressed, ReplyLen);
-
-			if (allowDeflate)
-				free (Compressed);
-
-			return 0;
-
 		}
 
 		else if (_memicmp(NodeURL, "/NODE/", 6))
