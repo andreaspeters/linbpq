@@ -27,7 +27,6 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include "mqtt.h"
 
 #pragma data_seg("_BPQDATA")
 

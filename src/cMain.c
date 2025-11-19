@@ -37,7 +37,6 @@ along with LinBPQ/BPQ32.  If not, see http://www.gnu.org/licenses
 #include "kernelresource.h"
 #include "cheaders.h"
 #include "tncinfo.h"
-#include "mqtt.h"
 
 VOID L2Routine(struct PORTCONTROL * PORT, PMESSAGE Buffer);
 VOID ProcessIframe(struct _LINKTABLE * LINK, PDATAMESSAGE Buffer);

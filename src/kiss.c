@@ -78,7 +78,6 @@ int i2c_smbus_read_byte()
 
 
 #include "cheaders.h"
-#include "mqtt.h"
 #include "kiss.h"
 
 int i2cPoll(struct PORTCONTROL * PORT, NPASYINFO npKISSINFO);
