@@ -2564,7 +2564,7 @@ noFlip:
 				if (memcmp(EXTPORT->PORT_DLL_NAME, "TELNET", 6) == 0 || memcmp(EXTPORT->PORT_DLL_NAME, "SCSPACTOR", 9) == 0)
 				{
 					NewSess->Secure_Session = Session->Secure_Session;
-					len = sprintf(Callstring,"C %s", cmdCopy);
+					len = snprintf(Callstring,sizeof(cmdCopy)+2, "C %s", cmdCopy);
 				}
 				else
 				{
@@ -4308,7 +4308,7 @@ struct CMDX COMMANDS[] =
 	"BYE         ",1,BYECMD,0,
 	"QUIT        ",1,BYECMD,0,
 	"INFO        ",1,CMDI00,0,
-	"HELP        ",1,HELPCMD,0,
+	"HELP        ",2,HELPCMD,0,
 	"VERSION     ",1,CMDV00,0,
 	"NODES       ",1,CMDN00,0,
 	"LINKS       ",1,CMDL00,0,
@@ -5658,18 +5658,75 @@ BOOL isSYSOP(TRANSPORTENTRY * Session, char * Bufferptr)
 
 VOID HELPCMD(TRANSPORTENTRY * Session, char * Bufferptr, char * CmdTail, struct CMDX * CMD)
 {
+  const char *helpFileName = "NodeHelp";
 	int FileSize;
 	char MsgFile[MAX_PATH];
 	FILE * hFile;
 	char * MsgBytes;
 	struct stat STAT;
-	char * ptr1, * ptr, * ptr2;
- 
-	sprintf_s(MsgFile, sizeof(MsgFile), "%s/%s", BPQDirectory, "NodeHelp.txt");
+	char * ptr1, * ptr, * ptr2, * ptr3, *Context;
+	char cleaned[MAX_PATH];
+	ptr3 = strtok_s(CmdTail, " ", &Context);
+	char tmp[MAX_PATH];
+
+
+
+	if (ptr3 != NULL)
+	{
+		if (_stricmp(ptr3, "INFO") == 0)
+		{
+			sprintf_s(MsgFile, sizeof(MsgFile), "%s/%s_INFO.txt", BPQDirectory, helpFileName);
+		}
+		else if (_stricmp(ptr3, "MHEARD") == 0)
+		{
+			sprintf_s(MsgFile, sizeof(MsgFile), "%s/%s_MHEARD.txt", BPQDirectory, helpFileName);
+		}
+		else if (_stricmp(ptr3, "CONNECT") == 0)
+		{
+			sprintf_s(MsgFile, sizeof(MsgFile), "%s/%s_CONNECT.txt", BPQDirectory, helpFileName);
+		}
+		else if (_stricmp(ptr3, "PORTS") == 0)
+		{
+			sprintf_s(MsgFile, sizeof(MsgFile), "%s/%s_PORTS.txt", BPQDirectory, helpFileName);
+		}
+		else if (_stricmp(ptr3, "ROUTES") == 0)
+		{
+			sprintf_s(MsgFile, sizeof(MsgFile), "%s/%s_ROUTES.txt", BPQDirectory, helpFileName);
+		}
+		else if (_stricmp(ptr3, "USERS") == 0)
+		{
+			sprintf_s(MsgFile, sizeof(MsgFile), "%s/%s_USERS.txt", BPQDirectory, helpFileName);
+		}
+		else if (_stricmp(ptr3, "NODES") == 0)
+		{
+			sprintf_s(MsgFile, sizeof(MsgFile), "%s/%s_NODES.txt", BPQDirectory, helpFileName);
+		}
+		else if (_stricmp(ptr3, "CHAT") == 0)
+		{
+			sprintf_s(MsgFile, sizeof(MsgFile), "%s/%s_CHAT.txt", BPQDirectory, helpFileName);
+		}
+		else
+		{
+			// unknown Topic
+			Bufferptr = Cmdprintf(Session, Bufferptr, "Unknown HELP topic: %s\r", ptr3);
+			SendCommandReply(Session, REPLYBUFFER, (int)(Bufferptr - (char *)REPLYBUFFER));
+			return;
+		}
+	}
+	else
+	{
+		sprintf_s(MsgFile, sizeof(MsgFile), "%s/%s.txt", BPQDirectory, helpFileName);
+	}
+
+	if (ptr3 != NULL)
+	{
+		sprintf_s(MsgFile, sizeof(MsgFile), "%s/%s_%s.txt", BPQDirectory, helpFileName, ptr3);
+	}
 
 	if (stat(MsgFile, &STAT) == -1)
 	{
-		Bufferptr = Cmdprintf(Session, Bufferptr, "Help file not found\r");
+		sprintf_s(tmp, sizeof(tmp), "%s file not found\r", MsgFile);
+		Bufferptr = Cmdprintf(Session, Bufferptr, tmp);
 		SendCommandReply(Session, REPLYBUFFER, (int)(Bufferptr - (char *)REPLYBUFFER));
 		return;
 	}
