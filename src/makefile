@@ -19,7 +19,7 @@ OBJS =  APRSIconData.o \
 CC = gcc
 		                       
 all: CFLAGS = -DLINBPQ -MMD -g -rdynamic -fcommon -fasynchronous-unwind-tables
-all: LDFLAGS = -l:libpaho-mqtt3a.a -l:libjansson.a
+all: LDFLAGS = 
 all: linbpq
 
 
@@ -31,7 +31,7 @@ noi2c: linbpq
 
 
 linbpq: $(OBJS)
-	gcc $(OBJS) -Xlinker -Map=output.map -l:libminiupnpc.a -lrt -lm -lz $(LDFLAGS) -lpthread -lconfig -lpcap -o linbpq
+	gcc $(OBJS) -Xlinker -Map=output.map -lrt -lm -lz $(LDFLAGS) -lpthread -lconfig -lpcap -o linbpq
 	echo sudo setcap "CAP_NET_ADMIN=ep CAP_NET_RAW=ep CAP_NET_BIND_SERVICE=ep" linbpq		
 
 -include *.d

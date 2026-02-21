@@ -5,4 +5,5 @@ linbpq
 src/.ccls-cache
 .ccls-cache
 */**/.ccls-cache
+*.swp
 

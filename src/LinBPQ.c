@@ -91,6 +91,7 @@ void SaveAIS();
 void initAIS();
 void DRATSPoll();
 void RHPPoll();
+BOOL OpenLogfile(int Flags);
 
 VOID GetPGConfig();
 void SendBBSDataToPktMap();
